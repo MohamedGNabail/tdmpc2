@@ -5,7 +5,6 @@ import gymnasium as gym
 
 from envs.wrappers.multitask import MultitaskWrapper
 from envs.wrappers.tensor import TensorWrapper
-import logging
 
 def missing_dependencies(task):
 	raise ValueError(f'Missing dependencies for task {task}; install dependencies to use this environment.')
@@ -60,9 +59,7 @@ def make_env(cfg):
 	"""
 	Make an environment for TD-MPC2 experiments.
 	"""
-
-	logging.getLogger().setLevel(logging.WARN)
-	# gym.logger.set_level(40)
+	gym.logger.set_level(40)
 	if cfg.multitask:
 		env = make_multitask_env(cfg)
 
@@ -81,6 +78,6 @@ def make_env(cfg):
 	except: # Box
 		cfg.obs_shape = {cfg.get('obs', 'state'): env.observation_space.shape}
 	cfg.action_dim = env.action_space.shape[0]
-	cfg.episode_length = env.env.max_episode_steps
+	cfg.episode_length = env.max_episode_steps
 	cfg.seed_steps = max(1000, 5*cfg.episode_length)
 	return env
