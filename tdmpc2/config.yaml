@@ -2,7 +2,7 @@ defaults:
     - override hydra/launcher: submitit_local
 
 # environment
-task: dog-run
+task: mw-door-close
 obs: state
 episodic: false
 
@@ -28,7 +28,7 @@ discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
 exp_name: default
-data_dir: ???
+data_dir: /data/tdmpc2
 
 # planning
 mpc: true
@@ -52,7 +52,7 @@ vmin: -10
 vmax: +10
 
 # architecture
-model_size: ???
+model_size: 5
 num_enc_layers: 2
 enc_dim: 256
 num_channels: 32
@@ -60,12 +60,14 @@ mlp_dim: 512
 latent_dim: 512
 task_dim: 96
 num_q: 5
+num_r: 5
+num_d: 5
 dropout: 0.01
 simnorm_dim: 8
 
 # logging
-wandb_project: ???
-wandb_entity: ???
+wandb_project: TDMPC2
+wandb_entity: mohamednabail_leaf
 wandb_silent: false
 enable_wandb: true
 save_csv: true
@@ -79,11 +81,11 @@ seed: 1
 # convenience
 work_dir: ???
 task_title: ???
-multitask: ???
-tasks: ???
-obs_shape: ???
-action_dim: ???
-episode_length: ???
+multitask: false
+tasks: door-unlock
+obs_shape: 39
+action_dim: 4
+episode_length: 200
 obs_shapes: ???
 action_dims: ???
 episode_lengths: ???
