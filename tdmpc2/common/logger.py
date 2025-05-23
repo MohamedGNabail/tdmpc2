@@ -135,6 +135,7 @@ class Logger:
 			tags=cfg_to_group(cfg, return_list=True) + [f"seed:{cfg.seed}"],
 			dir=self._log_dir,
 			config=dataclasses.asdict(cfg),
+			mode="online"
 		)
 		print(colored("Logs will be synced with wandb.", "blue", attrs=["bold"]))
 		self._wandb = wandb
