@@ -117,7 +117,7 @@ class WorldModel(nn.Module):
 		if self.cfg.multitask:
 			z = self.task_emb(z, task)
 		z = torch.cat([z, a], dim=-1)
-		return self._dynamics(z).mean(0)
+		return self._dynamics(z)
 
 	def reward(self, z, a, task):
 		"""
@@ -126,7 +126,7 @@ class WorldModel(nn.Module):
 		if self.cfg.multitask:
 			z = self.task_emb(z, task)
 		z = torch.cat([z, a], dim=-1)
-		return self._reward(z).mean(0)
+		return self._reward(z)
 	
 	def termination(self, z, task, unnormalized=False):
 		"""

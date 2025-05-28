@@ -2,7 +2,7 @@ defaults:
     - override hydra/launcher: submitit_local
 
 # environment
-task: mw-drawer-open
+task: mw-door-unlock
 obs: state
 episodic: false
 
@@ -82,7 +82,7 @@ seed: 1
 work_dir: ???
 task_title: ???
 multitask: false
-tasks: drawer-open
+tasks: door-unlock
 obs_shape: 39
 action_dim: 4
 episode_length: 200

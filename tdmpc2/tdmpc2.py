@@ -18,7 +18,7 @@ class TDMPC2(torch.nn.Module):
 	def __init__(self, cfg):
 		super().__init__()
 		self.cfg = cfg
-		self.device = torch.device('cuda:0')
+		self.device = torch.device('cuda:1')
 		self.model = WorldModel(cfg).to(self.device)
 		self.optim = torch.optim.Adam([
 			{'params': self.model._encoder.parameters(), 'lr': self.cfg.lr*self.cfg.enc_lr_scale},
@@ -34,11 +34,13 @@ class TDMPC2(torch.nn.Module):
 		self.scale = RunningScale(cfg)
 		self.cfg.iterations += 2*int(cfg.action_dim >= 20) # Heuristic for large action spaces
 		self.discount = torch.tensor(
-			[self._get_discount(ep_len) for ep_len in cfg.episode_lengths], device='cuda:0'
+			[self._get_discount(ep_len) for ep_len in cfg.episode_lengths], device='cuda:1'
 		) if self.cfg.multitask else self._get_discount(cfg.episode_length)
 		print('Episode length:', cfg.episode_length)
 		print('Discount factor:', self.discount)
 		self._prev_mean = torch.nn.Buffer(torch.zeros(self.cfg.horizon, self.cfg.action_dim, device=self.device))
+		self.training_step = 0
+		self.switch_member = 0
 		if cfg.compile:
 			print('Compiling update function with torch.compile...')
 			self._update = torch.compile(self._update, mode="reduce-overhead")
@@ -126,9 +128,19 @@ class TDMPC2(torch.nn.Module):
 		G, discount = 0, 1
 		termination = torch.zeros(self.cfg.num_samples, 1, dtype=torch.float32, device=z.device)
 		for t in range(self.cfg.horizon):
-			reward = math.two_hot_inv(self.model.reward(z, actions[t], task), self.cfg)
-			z = self.model.next(z, actions[t], task)
-			G = G + discount * (1-termination) * reward
+			reward_ens = self.model.reward(z, actions[t], task)
+			reward_ens = math.two_hot_inv(reward_ens, self.cfg)
+			reward = reward_ens.mean(dim=0)
+			reward_std = reward_ens.std(dim=0)  			
+			z_ens= self.model.next(z, actions[t], task)
+			z = z_ens.mean(dim=0)
+			z_std = z_ens.std(dim=0)
+			self.dyn_uncer_alpha_coef = max(0.0, 10.0 - self.training_step / 50000)
+			self.rew_uncer_beta_coef = max(0.0, 10.0 - self.training_step / 50000)
+			dyn_uncer = self.dyn_uncer_alpha_coef * z_std.norm(dim=-1, keepdim=True)
+			reward_uncer = self.rew_uncer_beta_coef * reward_std
+			adjusted_reward = reward + dyn_uncer + reward_uncer
+			G = G + discount * (1-termination) * adjusted_reward
 			discount_update = self.discount[torch.tensor(task)] if self.cfg.multitask else self.discount
 			discount = discount * discount_update
 			if self.cfg.episodic:
@@ -157,7 +169,7 @@ class TDMPC2(torch.nn.Module):
 			_z = z.repeat(self.cfg.num_pi_trajs, 1)
 			for t in range(self.cfg.horizon-1):
 				pi_actions[t], _ = self.model.pi(_z, task)
-				_z = self.model.next(_z, pi_actions[t], task)
+				_z = self.model.next(_z, pi_actions[t], task).mean(0)
 			pi_actions[-1], _ = self.model.pi(_z, task)
 
 		# Initialize state and parameters
@@ -271,15 +283,19 @@ class TDMPC2(torch.nn.Module):
 		z = self.model.encode(obs[0], task)
 		zs[0] = z
 		consistency_loss = 0
+		dyn_member_idx = self.switch_member  % self.cfg.num_d
 		for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
-			z = self.model.next(z, _action, task)
+			z_ens = self.model.next(z, _action, task)
+			z = z_ens[dyn_member_idx]
 			consistency_loss = consistency_loss + F.mse_loss(z, _next_z) * self.cfg.rho**t
 			zs[t+1] = z
 
 		# Predictions
 		_zs = zs[:-1]
 		qs = self.model.Q(_zs, action, task, return_type='all')
-		reward_preds = self.model.reward(_zs, action, task)
+		rew_member_idx = self.switch_member  % self.cfg.num_r
+		reward_preds_ens = self.model.reward(_zs, action ,task)
+		reward_preds = reward_preds_ens[rew_member_idx]
 		if self.cfg.episodic:
 			termination_pred = self.model.termination(zs[1:], task, unnormalized=True)
 
@@ -331,7 +347,7 @@ class TDMPC2(torch.nn.Module):
 		info.update(pi_info)
 		return info.detach().mean()
 
-	def update(self, buffer):
+	def update(self, buffer, step):
 		"""
 		Main update function. Corresponds to one iteration of model learning.
 
@@ -346,4 +362,6 @@ class TDMPC2(torch.nn.Module):
 		if task is not None:
 			kwargs["task"] = task
 		torch.compiler.cudagraph_mark_step_begin()
+		self.training_step = step
+		self.switch_member += 1 
 		return self._update(obs, action, reward, terminated, **kwargs)
