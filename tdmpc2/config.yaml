@@ -91,3 +91,6 @@ action_dims: ???
 episode_lengths: ???
 seed_steps: ???
 bin_size: ???
+
+#device 
+cuda_device: cuda:0
