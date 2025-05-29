@@ -296,6 +296,17 @@ class TDMPC2(torch.nn.Module):
 		rew_member_idx = self.switch_member  % self.cfg.num_r
 		reward_preds_ens = self.model.reward(_zs, action ,task)
 		reward_preds = reward_preds_ens[rew_member_idx]
+
+		"""
+		"""
+		labeled_queries = self.model.pbreward.get_labeled_queries()
+		self.total_feedback += self.model.pbreward.mb_size
+        self.labeled_feedback += labeled_queries
+		reward_loss = self.model.pbreward.learn_reward()
+        """
+		"""
+
+
 		if self.cfg.episodic:
 			termination_pred = self.model.termination(zs[1:], task, unnormalized=True)
 

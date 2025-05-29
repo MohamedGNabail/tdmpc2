@@ -51,6 +51,22 @@ num_bins: 101
 vmin: -10
 vmax: +10
 
+# prefernce based reward
+pref_segment: 50
+pref_activation: relu
+pref_reward_lr: 0.001
+pref_reward_batch: 128
+pref_large_batch: 10
+pref_label_margin: 0.0
+pref_teacher_beta: -1
+pref_teacher_gamma: 1
+pref_teacher_eps_mistake: 0
+pref_teacher_eps_skip: 0
+pref_teacher_eps_equal: 0
+pref_capacity: 5e5
+pref_feed_type: 0
+pref_reward_update: 200
+
 # architecture
 model_size: 5
 num_enc_layers: 2

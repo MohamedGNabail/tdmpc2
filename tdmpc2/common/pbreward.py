@@ -15,29 +15,23 @@ from scipy.stats import norm
 
 
 class RewardModel:
-    def __init__(self, cfg, ds, da, 
-                 ensemble_size=3, lr=3e-4, mb_size = 128, size_segment=1, 
-                 env_maker=None, max_size=100, activation='tanh', capacity=5e5,  
-                 large_batch=1, label_margin=0.0, 
-                 teacher_beta=-1, teacher_gamma=1, 
-                 teacher_eps_mistake=0, 
-                 teacher_eps_skip=0, 
-                 teacher_eps_equal=0):
+    def __init__(self, cfg, 
+                 env_maker=None, max_size=100):
         self.cfg = cfg 
         # train data is trajectories, must process to sa and s..   
-        self.ds = ds
-        self.da = da
-        self.de = ensemble_size
-        self.lr = lr
+        self.ds = cfg.latent_dim
+        self.da = cfg.action_dim
+        self.de = cfg.num_r
+        self.lr = cfg.pref_reward_lr
         self.ensemble = []
         self.paramlst = []
         self.opt = None
         self.model = None
         self.max_size = max_size
-        self.activation = activation
-        self.size_segment = size_segment
+        self.activation = cfg.pref_activation
+        self.size_segment = cfg.pref_segment
         
-        self.capacity = int(capacity)
+        self.capacity = int(cfg.pref_capacity)
         self.buffer_seg1 = np.empty((self.capacity, size_segment, self.ds+self.da), dtype=np.float32)
         self.buffer_seg2 = np.empty((self.capacity, size_segment, self.ds+self.da), dtype=np.float32)
         self.buffer_label = np.empty((self.capacity, 1), dtype=np.float32)
@@ -49,8 +43,8 @@ class RewardModel:
         self.targets = []
         self.raw_actions = []
         self.img_inputs = []
-        self.mb_size = mb_size
-        self.origin_mb_size = mb_size
+        self.mb_size = cfg.pref_reward_batch
+        self.origin_mb_size = cfg.pref_reward_batch
         self.train_batch_size = 128
         self.CEloss = nn.CrossEntropyLoss()
         self.running_means = []
@@ -58,18 +52,18 @@ class RewardModel:
         self.best_seg = []
         self.best_label = []
         self.best_action = []
-        self.large_batch = large_batch
+        self.large_batch = cfg.pref_large_batch
         
         # new teacher
-        self.teacher_beta = teacher_beta
-        self.teacher_gamma = teacher_gamma
-        self.teacher_eps_mistake = teacher_eps_mistake
-        self.teacher_eps_equal = teacher_eps_equal
-        self.teacher_eps_skip = teacher_eps_skip
+        self.teacher_beta = cfg.pref_teacher_beta
+        self.teacher_gamma = cfg.pref_teacher_gamma
+        self.teacher_eps_mistake = cfg.pref_teacher_eps_mistake
+        self.teacher_eps_equal = cfg.pref_teacher_eps_equal
+        self.teacher_eps_skip = cfg.pref_teacher_eps_skip
         self.teacher_thres_skip = 0
         self.teacher_thres_equal = 0
         
-        self.label_margin = label_margin
+        self.label_margin = cfg.pref_label_margin
         self.label_target = 1 - 2*self.label_margin
     
     def softXEnt_loss(self, input, target):
@@ -602,9 +596,10 @@ class RewardModel:
             self.opt.step()
         
         ensemble_acc = ensemble_acc / total
-        
-        return ensemble_acc
-    
+        log acc to wanbd 
+        return loss instead of acc 
+        return loss, ensemble_acc
+    also make changes here as well 
     def train_soft_reward(self):
         ensemble_losses = [[] for _ in range(self.de)]
         ensemble_acc = np.array([0 for _ in range(self.de)])
@@ -666,7 +661,7 @@ class RewardModel:
         
         ensemble_acc = ensemble_acc / total
         
-        return ensemble_acc
+        return loss , ensemble_acc
 
 
     def gen_net(self, in_size=1, out_size=1, H=128, n_layers=3, activation='tanh'):
@@ -734,3 +729,59 @@ class RewardModel:
                     
             total_dists = torch.cat(total_dists)
         return total_dists.unsqueeze(1)
+
+
+    def get_labeled_queries(self):
+        # get feedbacks
+        labeled_queries = 0
+        if first_flag == 1:
+            # if it is first time to get feedback, need to use random sampling
+            labeled_queries = self.uniform_sampling()
+        else:
+            if self.cfg.pref_feed_type == 0:
+                labeled_queries = self.uniform_sampling()
+            elif self.cfg.pref_feed_type == 1:
+                labeled_queries = self.disagreement_sampling()
+            elif self.cfg.pref_feed_type == 2:
+                labeled_queries = self.entropy_sampling()
+            elif self.cfg.pref_feed_type == 3:
+                labeled_queries = self.kcenter_sampling()
+            elif self.cfg.pref_feed_type == 4:
+                labeled_queries = self.kcenter_disagree_sampling()
+            elif self.cfg.pref_feed_type == 5:
+                labeled_queries = self.kcenter_entropy_sampling()
+            else:
+                raise NotImplementedError
+        return labeled_queries
+
+    def get_labels_for_queries(self):
+        # get queries
+        sa_t_1, sa_t_2, r_t_1, r_t_2 =  self.get_queries(
+            mb_size=self.mb_size)
+            
+        # get labels
+        sa_t_1, sa_t_2, r_t_1, r_t_2, labels = self.get_label(
+            sa_t_1, sa_t_2, r_t_1, r_t_2)
+        
+        if len(labels) > 0:
+            self.put_queries(sa_t_1, sa_t_2, labels)
+        
+        return len(labels)
+        return labeled_queries
+
+
+
+    def learn_reward(self):
+        train_acc = 0
+        if self.labeled_feedback > 0:
+            # update reward
+            for epoch in range(self.cfg.pref_reward_update):
+                if self.cfg.label_margin > 0 or self.cfg.pref_teacher_eps_equal > 0:
+                    reward_loss, train_acc = self.train_soft_reward()
+                else:
+                    reward_loss, train_acc = self.train_reward()
+                total_acc = np.mean(train_acc)
+                
+                if total_acc > 0.97:
+                    break;
+        return reward_loss

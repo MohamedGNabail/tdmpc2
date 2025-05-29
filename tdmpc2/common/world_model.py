@@ -25,22 +25,7 @@ class WorldModel(nn.Module):
 		self._encoder = layers.enc(cfg)
 		self._dynamics = layers.Ensemble([layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], cfg.latent_dim, act=layers.SimNorm(cfg)) for _ in range(cfg.num_d)])
 		self._reward = layers.Ensemble([layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1)) for _ in range(cfg.num_r)])
-		self._pb_reward = RewardModel(
-			cfg, 
-            self.env.observation_space.shape[0],
-            self.env.action_space.shape[0],
-            ensemble_size=cfg.ensemble_size,
-            size_segment=cfg.segment,
-            activation=cfg.activation, 
-            lr=cfg.reward_lr,
-            mb_size=cfg.reward_batch, 
-            large_batch=cfg.large_batch, 
-            label_margin=cfg.label_margin, 
-            teacher_beta=cfg.teacher_beta, 
-            teacher_gamma=cfg.teacher_gamma, 
-            teacher_eps_mistake=cfg.teacher_eps_mistake, 
-            teacher_eps_skip=cfg.teacher_eps_skip, 
-            teacher_eps_equal=cfg.teacher_eps_equal)
+		self._pb_reward = RewardModel(cfg)
 		self._termination = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 1) if cfg.episodic else None
 		self._pi = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 2*cfg.action_dim)
 		self._Qs = layers.Ensemble([layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1), dropout=cfg.dropout) for _ in range(cfg.num_q)])
