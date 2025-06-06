@@ -118,7 +118,7 @@ class NormedLinear(nn.Linear):
 			f"act={self.act.__class__.__name__})"
 
 
-def mlp(in_dim, mlp_dims, out_dim, act=None, dropout=0.):
+def mlp(in_dim, mlp_dims, out_dim, hidden_act=None , act=None, dropout=0.):
 	"""
 	Basic building block of TD-MPC2.
 	MLP with LayerNorm, Mish activations, and optionally dropout.
@@ -128,7 +128,7 @@ def mlp(in_dim, mlp_dims, out_dim, act=None, dropout=0.):
 	dims = [in_dim] + mlp_dims + [out_dim]
 	mlp = nn.ModuleList()
 	for i in range(len(dims) - 2):
-		mlp.append(NormedLinear(dims[i], dims[i+1], dropout=dropout*(i==0)))
+		mlp.append(NormedLinear(dims[i], dims[i+1], dropout=dropout*(i==0) , act = hidden_act))
 	mlp.append(NormedLinear(dims[-2], dims[-1], act=act) if act else nn.Linear(dims[-2], dims[-1]))
 	return nn.Sequential(*mlp)
 

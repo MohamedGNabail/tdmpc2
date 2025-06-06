@@ -130,7 +130,7 @@ class Logger:
 		wandb.init(
 			project=self.project,
 			entity=self.entity,
-			name=str(cfg.seed) + "_"+ str(cfg.exp_name + "_1_0_" ) + "explore",
+			name=str(cfg.seed) + str(cfg.exp_name),
 			group=self._group,
 			tags=cfg_to_group(cfg, return_list=True) + [f"seed:{cfg.seed}"],
 			dir=self._log_dir,
