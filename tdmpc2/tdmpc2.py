@@ -99,7 +99,7 @@ class TDMPC2(torch.nn.Module):
 		return
 
 	@torch.no_grad()
-	def act(self, obs, t0=False, eval_mode=False, task=None):
+	def act(self, obs, t0=False, eval_mode=False, task=None, planning_w_uncertainty=True):
 		"""
 		Select an action by planning in the latent space of the world model.
 
@@ -116,7 +116,7 @@ class TDMPC2(torch.nn.Module):
 		if task is not None:
 			task = torch.tensor([task], device=self.device)
 		if self.cfg.mpc:
-			return self.plan(obs, t0=t0, eval_mode=eval_mode, task=task).cpu()
+			return self.plan(obs, t0=t0, eval_mode=eval_mode, task=task, planning_w_uncertainty=planning_w_uncertainty).cpu()
 		z = self.model.encode(obs, task)
 		action, info = self.model.pi(z, task)
 		if eval_mode:
@@ -124,7 +124,7 @@ class TDMPC2(torch.nn.Module):
 		return action[0].cpu()
 
 	@torch.no_grad()
-	def _estimate_value(self, z, actions, task):
+	def _estimate_value(self, z, actions, task, planning_w_uncertainty=True):
 		"""Estimate value of a trajectory starting at latent state z and executing given actions."""
 		G, discount = 0, 1
 		termination = torch.zeros(self.cfg.num_samples, 1, dtype=torch.float32, device=z.device)
@@ -136,10 +136,10 @@ class TDMPC2(torch.nn.Module):
 			z_ens= self.model.next(z, actions[t], task)
 			z = z_ens.mean(dim=0)
 			z_std = z_ens.std(dim=0)
-			self.dyn_uncer_alpha_coef = 0 #max(0.0, 10.0 - self.training_step / 50000)
-			self.rew_uncer_beta_coef = 0 #max(0.0, 10.0 - self.training_step / 50000)
-			dyn_uncer = self.dyn_uncer_alpha_coef * z_std.norm(dim=-1, keepdim=True)
-			reward_uncer = self.rew_uncer_beta_coef * reward_std
+			dyn_uncer_alpha_coef = self.cfg.dyn_uncer_alpha_coef if planning_w_uncertainty else 0.0
+			rew_uncer_beta_coef = self.cfg.rew_uncer_beta_coef if planning_w_uncertainty else 0.0
+			dyn_uncer = dyn_uncer_alpha_coef * z_std.norm(dim=-1, keepdim=True)
+			reward_uncer = rew_uncer_beta_coef * reward_std
 			adjusted_reward = reward + dyn_uncer + reward_uncer
 			G = G + discount * (1-termination) * adjusted_reward
 			discount_update = self.discount[torch.tensor(task)] if self.cfg.multitask else self.discount
@@ -150,7 +150,7 @@ class TDMPC2(torch.nn.Module):
 		return G + discount * (1-termination) * self.model.Q(z, action, task, return_type='avg')
 
 	@torch.no_grad()
-	def _plan(self, obs, t0=False, eval_mode=False, task=None):
+	def _plan(self, obs, t0=False, eval_mode=False, task=None, planning_w_uncertainty=True):
 		"""
 		Plan a sequence of actions using the learned world model.
 
@@ -195,7 +195,7 @@ class TDMPC2(torch.nn.Module):
 				actions = actions * self.model._action_masks[task]
 
 			# Compute elite actions
-			value = self._estimate_value(z, actions, task).nan_to_num(0)
+			value = self._estimate_value(z, actions, task, planning_w_uncertainty).nan_to_num(0)
 			elite_idxs = torch.topk(value.squeeze(1), self.cfg.num_elites, dim=0).indices
 			elite_value, elite_actions = value[elite_idxs], actions[:, elite_idxs]
 

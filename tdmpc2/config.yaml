@@ -111,3 +111,7 @@ bin_size: ???
 
 #device 
 cuda_device: cuda:1
+
+#planning w uncertainty
+rew_uncer_beta_coef: 10
+dyn_uncer_beta_coef: 10
