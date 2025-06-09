@@ -2,7 +2,7 @@ defaults:
     - override hydra/launcher: submitit_local
 
 # environment
-task: mw-door-open
+task: mw-coffee-push
 obs: state
 episodic: false
 
@@ -27,7 +27,7 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: _seed_0_reward_0_dynamics_pref_learning
+exp_name: pref_learning
 data_dir: /data/tdmpc2
 
 # planning
@@ -93,13 +93,13 @@ save_csv: true
 compile: true
 save_video: true
 save_agent: true
-seed: 3
+seed: 1
 
 # convenience
 work_dir: ???
 task_title: ???
 multitask: false
-tasks: door-open
+tasks: coffee-push
 obs_shape: 39
 action_dim: 4
 episode_length: 200
@@ -113,5 +113,6 @@ bin_size: ???
 cuda_device: cuda:1
 
 #planning w uncertainty
-rew_uncer_beta_coef: 10
-dyn_uncer_beta_coef: 10
+rew_uncer_beta_coef: 0
+dyn_uncer_alpha_coef: 0
+evaluate_w_uncer: false
