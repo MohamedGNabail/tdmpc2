@@ -27,7 +27,7 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: pref_learning
+exp_name: debug
 data_dir: /data/tdmpc2
 
 # planning
@@ -113,6 +113,6 @@ bin_size: ???
 cuda_device: cuda:1
 
 #planning w uncertainty
-rew_uncer_beta_coef: 0
-dyn_uncer_alpha_coef: 0
+rew_uncer_beta_coef: 10
+dyn_uncer_alpha_coef: 10
 evaluate_w_uncer: false

@@ -34,7 +34,8 @@ class OnlineTrainer(Trainer):
 				self.logger.video.init(self.env, enabled=(i==0))
 			while not done:
 				torch.compiler.cudagraph_mark_step_begin()
-				action = self.agent.act(obs, t0=t==0, eval_mode=True)
+				action, _, _, _ , _ = self.agent.act(obs, t0=t==0, eval_mode=True)
+				action = action.cpu()
 				obs, reward, done, info = self.env.step(action)
 				ep_reward += reward
 				t += 1
@@ -105,7 +106,13 @@ class OnlineTrainer(Trainer):
 
 			# Collect experience
 			if self._step > self.cfg.seed_steps:
-				action = self.agent.act(obs, t0=len(self._tds)==1)
+				action,  pred_reward, reward_uncer, dyn_uncer , adjusted_pred_reward = self.agent.act(obs, t0=len(self._tds)==1)
+				action = action.cpu()
+				train_metrics.update(
+						pred_reward=pred_reward,
+						reward_uncer=reward_uncer,
+						dyn_uncer=dyn_uncer,
+						adjusted_pred_reward=adjusted_pred_reward)
 			else:
 				action = self.env.rand_act()
 			obs, reward, done, info = self.env.step(action)

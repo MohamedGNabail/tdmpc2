@@ -116,7 +116,7 @@ class TDMPC2(torch.nn.Module):
 		if task is not None:
 			task = torch.tensor([task], device=self.device)
 		if self.cfg.mpc:
-			return self.plan(obs, t0=t0, eval_mode=eval_mode, task=task, planning_w_uncertainty=planning_w_uncertainty).cpu()
+			return self.plan(obs, t0=t0, eval_mode=eval_mode, task=task, planning_w_uncertainty=planning_w_uncertainty)
 		z = self.model.encode(obs, task)
 		action, info = self.model.pi(z, task)
 		if eval_mode:
@@ -140,14 +140,14 @@ class TDMPC2(torch.nn.Module):
 			rew_uncer_beta_coef = self.cfg.rew_uncer_beta_coef if planning_w_uncertainty else 0.0
 			dyn_uncer = dyn_uncer_alpha_coef * z_std.norm(dim=-1, keepdim=True)
 			reward_uncer = rew_uncer_beta_coef * reward_std
-			adjusted_reward = reward + dyn_uncer + reward_uncer
+			adjusted_reward = reward + reward_uncer * (1 + dyn_uncer)
 			G = G + discount * (1-termination) * adjusted_reward
 			discount_update = self.discount[torch.tensor(task)] if self.cfg.multitask else self.discount
 			discount = discount * discount_update
 			if self.cfg.episodic:
 				termination = torch.clip(termination + (self.model.termination(z, task) > 0.5).float(), max=1.)
 		action, _ = self.model.pi(z, task)
-		return G + discount * (1-termination) * self.model.Q(z, action, task, return_type='avg')
+		return G + discount * (1-termination) * self.model.Q(z, action, task, return_type='avg') , reward, reward_uncer, dyn_uncer , adjusted_reward
 
 	@torch.no_grad()
 	def _plan(self, obs, t0=False, eval_mode=False, task=None, planning_w_uncertainty=True):
@@ -195,9 +195,11 @@ class TDMPC2(torch.nn.Module):
 				actions = actions * self.model._action_masks[task]
 
 			# Compute elite actions
-			value = self._estimate_value(z, actions, task, planning_w_uncertainty).nan_to_num(0)
+			value, pred_reward, reward_uncer, dyn_uncer , adjusted_pred_reward = self._estimate_value(z, actions, task, planning_w_uncertainty)
+			value = value.nan_to_num(0)
 			elite_idxs = torch.topk(value.squeeze(1), self.cfg.num_elites, dim=0).indices
-			elite_value, elite_actions = value[elite_idxs], actions[:, elite_idxs]
+			elite_value, elite_actions , elite_pred_rewards , elite_rew_uncer , elite_dyn_uncer , elite_adjusted_reward \
+			= value[elite_idxs], actions[:, elite_idxs] , pred_reward[elite_idxs], reward_uncer[elite_idxs], dyn_uncer[elite_idxs] , adjusted_pred_reward[elite_idxs]
 
 			# Update parameters
 			max_value = elite_value.max(0).values
@@ -213,11 +215,15 @@ class TDMPC2(torch.nn.Module):
 		# Select action
 		rand_idx = math.gumbel_softmax_sample(score.squeeze(1))
 		actions = torch.index_select(elite_actions, 1, rand_idx).squeeze(1)
-		a, std = actions[0], std[0]
+		reward_uncer = torch.index_select(elite_rew_uncer, 0, rand_idx).squeeze(1)
+		dyn_uncer = torch.index_select(elite_dyn_uncer, 0, rand_idx).squeeze(1)
+		adjusted_pred_reward = torch.index_select(elite_adjusted_reward, 0, rand_idx).squeeze(1)
+		pred_reward = torch.index_select(elite_pred_rewards, 0, rand_idx)
+		a, std= actions[0], std[0]
 		if not eval_mode:
 			a = a + std * torch.randn(self.cfg.action_dim, device=std.device)
 		self._prev_mean.copy_(mean)
-		return a.clamp(-1, 1)
+		return a.clamp(-1, 1), pred_reward[0], reward_uncer[0], dyn_uncer[0], adjusted_pred_reward[0]
 
 	def update_pi(self, zs, task):
 		"""
