@@ -3,6 +3,156 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tensordict import from_modules
 from copy import deepcopy
+from common.jrd import JensenRenyiDivergence
+import math 
+class EnsembleLinear(nn.Module):
+
+    def __init__(self, in_features, out_features, ensemble_size, norm=True, bias=True):
+        super().__init__()
+        self.ensemble_size = ensemble_size
+        self.in_features = in_features
+        self.out_features = out_features
+        self.weights = torch.Tensor(ensemble_size, in_features, out_features)
+        if bias:
+            self.biases = torch.Tensor(ensemble_size, 1, out_features)
+        else:
+            self.register_parameter('biases', None)
+    
+        self.reset_parameters()
+
+        self.norm = norm
+        if self.norm:
+            self.layernorms = nn.ModuleList([
+                nn.LayerNorm(out_features) for _ in range(ensemble_size)
+            ])
+        else:
+            self.layernorms = None
+
+    def reset_parameters(self):
+        for w in self.weights:
+            w.transpose_(0, 1)
+            nn.init.kaiming_uniform_(w, a=math.sqrt(5))
+            w.transpose_(0, 1)
+
+        self.weights = nn.Parameter(self.weights)
+
+        if self.biases is not None:
+            fan_in, _ = nn.init._calculate_fan_in_and_fan_out(
+                self.weights[0].T)
+            bound = 1 / math.sqrt(fan_in)
+            nn.init.uniform_(self.biases, -bound, bound)
+            self.biases = nn.Parameter(self.biases)
+
+    def forward(self, input):
+        if len(input.shape) == 2:
+            input = input.repeat(self.ensemble_size, 1, 1)
+
+        out = torch.baddbmm(self.biases, input, self.weights)
+
+        if self.norm and self.layernorms is not None:
+            # out is shape [ensemble_size, batch_size, out_features]
+            # We want to apply LN to each [batch_size, out_features]
+            outs = []
+            for i in range(self.ensemble_size):
+                outs.append(self.layernorms[i](out[i]))
+            out = torch.stack(outs, dim=0)
+        
+        return out
+
+    def single_forward(self, input, index):
+        if len(input.shape) == 2:
+            input = input.repeat(1, 1, 1)
+
+        out = torch.baddbmm(self.biases[index].unsqueeze(dim=0), input, self.weights[index].unsqueeze(dim=0))
+        # referenced pytorch.nn.linear.py at https://github.com/pytorch/pytorch/blob/master/torch/nn/modules/linear.py
+        # return F.linear(input, self.weights[index], self.biases[index][0])
+
+        if self.norm and self.layernorms is not None:
+            # Apply LN on out[0], shape is [batch_size, out_features]
+            out = self.layernorms[index](out[0])
+            out = out.unsqueeze(0)
+
+        return out
+
+    def extra_repr(self) -> str:
+        return 'ensemble_size = {}, in_features={}, out_features={}, biases={}'.format(
+            self.ensemble_size, self.in_features, self.out_features, self.biases is not None
+        )
+
+
+
+class EnsembleStochasticLinear(torch.nn.Module):
+    def __init__(self, in_features, hidden_features, out_features, ensemble_size=3, activation='relu', explore_var='legacy'):
+        super(EnsembleStochasticLinear, self).__init__()
+        self.ensemble_size = ensemble_size
+        self.explore_var = explore_var
+        self.n_output = out_features
+
+        self.lin1 = EnsembleLinear(in_features=in_features,
+                                   out_features=hidden_features, ensemble_size=self.ensemble_size, bias=True)
+        self.lin2 = EnsembleLinear(in_features=hidden_features,
+                                   out_features=hidden_features * 2, ensemble_size=self.ensemble_size, bias=True)
+        self.lin3 = EnsembleLinear(in_features=hidden_features * 2,
+                                   out_features=hidden_features * 3, ensemble_size=self.ensemble_size, bias=True)
+        self.lin4 = EnsembleLinear(in_features=hidden_features * 3,
+                                   out_features=hidden_features, ensemble_size=self.ensemble_size, bias=True)
+        self.lin5 = EnsembleLinear(in_features=hidden_features,
+                                   out_features=out_features*2, ensemble_size=self.ensemble_size, norm=False, bias=True)
+        if activation == 'relu':
+            self.act = nn.ReLU()
+        elif activation == 'tanh':
+            self.act = nn.Tanh()
+        elif activation == 'leaky_relu':
+            self.act = nn.LeakyReLU()
+        elif activation == 'softplus':
+            self.act = nn.Softplus()
+        self.log_std_min = -20
+        self.log_std_max = 1  # 2
+
+    def forward(self, x):
+        prev_x = x.clone().detach()  # save previous state (history)
+        x = self.act(self.lin1(x))
+        x = self.act(self.lin2(x))
+        x = self.act(self.lin3(x))
+        x = self.act(self.lin4(x))
+        x = self.lin5(x)
+
+        mu = x[:, :, :self.n_output]
+        log_std = x[:, :, self.n_output:]
+        log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
+
+        # List to store mean and log_std of each ensemble
+        ensemble_outputs = []
+        
+        # Loop through each ensemble to collect mu and log_std
+        for i in range(self.ensemble_size):
+            yhat = (mu[i], log_std[i])
+            ensemble_outputs.append(yhat)
+
+        if self.explore_var == 'jrd':
+            std = torch.exp(log_std)
+            jrd_div = JensenRenyiDivergence(
+                states_mean=mu, states_var=std.square()).compute_measure()
+            dis = jrd_div.abs().unsqueeze(1)
+
+        return (*ensemble_outputs, dis)
+
+    def single_forward(self, x, index):
+        prev_x = x.clone().detach()  # save previous state
+        x = self.act(self.lin1.single_forward(x, index))
+        x = self.act(self.lin2.single_forward(x, index))
+        x = self.act(self.lin3.single_forward(x, index))
+        x = self.act(self.lin4.single_forward(x, index))
+        x = self.lin5.single_forward(x, index)
+
+        mu = x[:, :, :self.n_output]
+        log_std = x[:, :, self.n_output:]
+        log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
+        yhat = mu.squeeze(dim=0), log_std.squeeze(dim=0)  # indexing 0
+
+        return yhat
+    
+
 
 
 class Ensemble(nn.Module):

@@ -6,6 +6,7 @@ import torch.nn as nn
 from common import layers, math, init
 from tensordict import TensorDict
 from tensordict.nn import TensorDictParams
+from common.layers import EnsembleStochasticLinear
 
 class WorldModel(nn.Module):
 	"""
@@ -23,7 +24,8 @@ class WorldModel(nn.Module):
 				self._action_masks[i, :cfg.action_dims[i]] = 1.
 		self._encoder = layers.enc(cfg)
 		self._dynamics = layers.Ensemble([layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], cfg.latent_dim, act=layers.SimNorm(cfg)) for _ in range(cfg.num_d)])
-		# self._reward = layers.Ensemble([layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1)) for _ in range(cfg.num_r)]) #replaced with pref model
+		self._new_dynamics = EnsembleStochasticLinear(cfg.latent_dim + cfg.action_dim + cfg.task_dim, cfg.mlp_dim, cfg.latent_dim, ensemble_size=cfg.num_d, explore_var='jrd')
+		# self._reward = layers.Ensemble([layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1)) for _ in range(cfg.num_r)]) # this is the old reward model, replaced with pref model 
 		self._reward =layers.Ensemble([layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 3*[cfg.mlp_reward_dim], 1 , hidden_act=nn.LeakyReLU() , act=nn.ReLU() , Normed=False) for _ in range(cfg.num_r)])
 		self._termination = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 1) if cfg.episodic else None
 		self._pi = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 2*cfg.action_dim)
@@ -54,8 +56,8 @@ class WorldModel(nn.Module):
 
 	def __repr__(self):
 		repr = 'TD-MPC2 World Model\n'
-		modules = ['Encoder', 'Dynamics', 'Reward', 'Termination', 'Policy prior', 'Q-functions']
-		for i, m in enumerate([self._encoder, self._dynamics, self._reward, self._termination, self._pi, self._Qs]):
+		modules = ['Encoder', 'OldDynamics', 'Dynamics' , 'Reward', 'Termination', 'Policy prior', 'Q-functions']
+		for i, m in enumerate([self._encoder, self._dynamics, self._new_dynamics, self._reward, self._termination, self._pi, self._Qs]):
 			if m == self._termination and not self.cfg.episodic:
 				continue
 			repr += f"{modules[i]}: {m}\n"
@@ -118,6 +120,11 @@ class WorldModel(nn.Module):
 		if self.cfg.multitask:
 			z = self.task_emb(z, task)
 		z = torch.cat([z, a], dim=-1)
+		z2 = self._new_dynamics(z)
+		z3 = self._dynamics(z)
+		print(z2[0].shape , z2[1].shape)
+		print(z3.shape)
+		assert False
 		return self._dynamics(z)
 
 	def reward(self, z, a, task):
