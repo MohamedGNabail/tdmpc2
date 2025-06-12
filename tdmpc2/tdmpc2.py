@@ -129,17 +129,16 @@ class TDMPC2(torch.nn.Module):
 		G, discount = 0, 1
 		termination = torch.zeros(self.cfg.num_samples, 1, dtype=torch.float32, device=z.device)
 		for t in range(self.cfg.horizon):
-			reward_ens = self.model.reward(z, actions[t], task)
+			reward_ens = self.model.reward(z, actions[t], task)                                #(5 x 512 x 1) num_ensemble x batch_size x 1
 			# reward_ens = math.two_hot_inv(reward_ens, self.cfg) removed because the preference model is deterministic
-			reward = reward_ens.mean(dim=0)
-			reward_std = reward_ens.std(dim=0)  			
-			z_ens= self.model.next(z, actions[t], task)
-			z = z_ens.mean(dim=0)
-			z_std = z_ens.std(dim=0)
+			reward = reward_ens.mean(dim=0)                                                    #(512 x 1)  batch_size x 1
+			reward_std = reward_ens.std(dim=0)  			                                   #(512 x 1)  batch_size x 1
+			z_ens , dyn_disagreement = self.model.next(z, actions[t], task)                    #(5 x 512 x 512) num_ensemble x batch_size x latent_dim , (512 x 1) batch_size x 1
+			z = z_ens.mean(dim=0)                                                              #(512 x 512) batch_size x latent_dim
 			dyn_uncer_alpha_coef = self.cfg.dyn_uncer_alpha_coef if planning_w_uncertainty else 0.0
 			rew_uncer_beta_coef = self.cfg.rew_uncer_beta_coef if planning_w_uncertainty else 0.0
-			dyn_uncer = dyn_uncer_alpha_coef * z_std.norm(dim=-1, keepdim=True)
-			reward_uncer = rew_uncer_beta_coef * reward_std
+			dyn_uncer = dyn_uncer_alpha_coef * dyn_disagreement                                #(512 x 1) batch_size x 1
+			reward_uncer = rew_uncer_beta_coef * reward_std                                    #(512 x 1) batch_size x 1
 			adjusted_reward = reward + reward_uncer * (1 + dyn_uncer)
 			G = G + discount * (1-termination) * adjusted_reward
 			discount_update = self.discount[torch.tensor(task)] if self.cfg.multitask else self.discount
@@ -170,8 +169,9 @@ class TDMPC2(torch.nn.Module):
 			_z = z.repeat(self.cfg.num_pi_trajs, 1)
 			for t in range(self.cfg.horizon-1):
 				pi_actions[t], _ = self.model.pi(_z, task)
-				_z = self.model.next(_z, pi_actions[t], task).mean(0)
-			pi_actions[-1], _ = self.model.pi(_z, task)
+				z_ens , _ = self.model.next(_z, pi_actions[t], task)
+				_z = z_ens.mean(dim=0)  # Use mean of ensemble predictions
+				pi_actions[-1], _ = self.model.pi(_z, task)
 
 		# Initialize state and parameters
 		z = z.repeat(self.cfg.num_samples, 1)
@@ -215,6 +215,7 @@ class TDMPC2(torch.nn.Module):
 		# Select action
 		rand_idx = math.gumbel_softmax_sample(score.squeeze(1))
 		actions = torch.index_select(elite_actions, 1, rand_idx).squeeze(1)
+		pred_values = torch.index_select(elite_value, 0, rand_idx).squeeze(1)
 		reward_uncer = torch.index_select(elite_rew_uncer, 0, rand_idx).squeeze(1)
 		dyn_uncer = torch.index_select(elite_dyn_uncer, 0, rand_idx).squeeze(1)
 		adjusted_pred_reward = torch.index_select(elite_adjusted_reward, 0, rand_idx).squeeze(1)
@@ -223,7 +224,7 @@ class TDMPC2(torch.nn.Module):
 		if not eval_mode:
 			a = a + std * torch.randn(self.cfg.action_dim, device=std.device)
 		self._prev_mean.copy_(mean)
-		return a.clamp(-1, 1), pred_reward[0], reward_uncer[0], dyn_uncer[0], adjusted_pred_reward[0]
+		return a.clamp(-1, 1), pred_values[0] , pred_reward[0], reward_uncer[0], dyn_uncer[0], adjusted_pred_reward[0]
 
 	def update_pi(self, zs, task):
 		"""
@@ -295,7 +296,7 @@ class TDMPC2(torch.nn.Module):
 		for member, idx in enumerate(split_indices):
 			for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
 				# Predict next latent state for all ensemble members, then select this member's
-				z_ens = self.model.next(z[idx], _action[idx], task)  # shape [ensemble_size, chunk_size, latent_dim]
+				z_ens , _ = self.model.next(z[idx], _action[idx], task)  # shape [ensemble_size, chunk_size, latent_dim]
 				z[idx] = z_ens[member]  # shape [chunk_size, latent_dim]
 
 				# Compute loss and update latent
@@ -341,7 +342,7 @@ class TDMPC2(torch.nn.Module):
 
 		reward_loss = nn.CrossEntropyLoss(ignore_index=-1)(logits, true_label)
 		return reward_loss
-
+	
 	def _update(self, obs, action, reward, terminated, task=None):
 		# Compute targets
 		with torch.no_grad():
@@ -357,7 +358,8 @@ class TDMPC2(torch.nn.Module):
 		zs[0] = z
 		consistency_loss = 0
 		for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
-			z = self.model.next(z, _action, task).mean(dim=0)  # shape [batch_size, latent_dim]
+			ensemble_pred , _ = self.model.next(z, _action, task)  # shape [batch_size, latent_dim]
+			z = ensemble_pred.mean(dim=0) 
 			consistency_loss = consistency_loss + F.mse_loss(z, _next_z) * self.cfg.rho**t
 			zs[t+1] = z
 
