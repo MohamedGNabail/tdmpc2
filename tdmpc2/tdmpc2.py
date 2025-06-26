@@ -99,7 +99,7 @@ class TDMPC2(torch.nn.Module):
 		return
 
 	@torch.no_grad()
-	def act(self, obs, t0=False, eval_mode=False, task=None, planning_w_uncertainty=True):
+	def act(self, obs, t0=False, eval_mode=False, task=None):
 		"""
 		Select an action by planning in the latent space of the world model.
 
@@ -116,7 +116,7 @@ class TDMPC2(torch.nn.Module):
 		if task is not None:
 			task = torch.tensor([task], device=self.device)
 		if self.cfg.mpc:
-			return self.plan(obs, t0=t0, eval_mode=eval_mode, task=task, planning_w_uncertainty=planning_w_uncertainty)
+			return self.plan(obs, t0=t0, eval_mode=eval_mode, task=task)
 		z = self.model.encode(obs, task)
 		action, info = self.model.pi(z, task)
 		if eval_mode:
@@ -124,32 +124,40 @@ class TDMPC2(torch.nn.Module):
 		return action[0].cpu()
 
 	@torch.no_grad()
-	def _estimate_value(self, z, actions, task, planning_w_uncertainty=True):
+	def _estimate_value(self, z, actions, task, eval_mode=False):
 		"""Estimate value of a trajectory starting at latent state z and executing given actions."""
 		G, discount = 0, 1
 		termination = torch.zeros(self.cfg.num_samples, 1, dtype=torch.float32, device=z.device)
 		for t in range(self.cfg.horizon):
-			reward_ens = self.model.reward(z, actions[t], task)                                #(5 x 512 x 1) num_ensemble x batch_size x 1
+
 			# reward_ens = math.two_hot_inv(reward_ens, self.cfg) removed because the preference model is deterministic
-			reward = reward_ens.mean(dim=0)                                                    #(512 x 1)  batch_size x 1
-			reward_std = reward_ens.std(dim=0)  			                                   #(512 x 1)  batch_size x 1
+			reward_ens, reward_disagreement, reward_numeric_uncer = self._compute_reward(z, actions[t], task)
+			reward = reward_ens.mean(dim=0)
 			z_ens , dyn_disagreement = self.model.next(z, actions[t], task)                    #(5 x 512 x 512) num_ensemble x batch_size x latent_dim , (512 x 1) batch_size x 1
 			z = z_ens.mean(dim=0)                                                              #(512 x 512) batch_size x latent_dim
-			dyn_uncer_alpha_coef = self.cfg.dyn_uncer_alpha_coef if planning_w_uncertainty else 0.0
-			rew_uncer_beta_coef = self.cfg.rew_uncer_beta_coef if planning_w_uncertainty else 0.0
-			dyn_uncer = dyn_uncer_alpha_coef * dyn_disagreement                                #(512 x 1) batch_size x 1
-			reward_uncer = rew_uncer_beta_coef * reward_std                                    #(512 x 1) batch_size x 1
-			adjusted_reward = reward + reward_uncer * (1 + dyn_uncer)
+			dyn_uncer_beta_coef = 0 if eval_mode else self.cfg.dyn_uncer_beta_coef
+			rew_uncer_alpha_coef = 0 if eval_mode else self.cfg.rew_uncer_alpha_coef
+			dyn_uncer = dyn_uncer_beta_coef * dyn_disagreement                                #(512 x 1) batch_size x 1
+			reward_uncer = rew_uncer_alpha_coef * reward_disagreement                           #(512 x 1) batch_size x 1
+			reward_num_uncer = rew_uncer_alpha_coef * reward_numeric_uncer                           #(512 x 1) batch_size x 1
+			adjusted_reward = reward + reward_uncer + dyn_uncer
 			G = G + discount * (1-termination) * adjusted_reward
 			discount_update = self.discount[torch.tensor(task)] if self.cfg.multitask else self.discount
 			discount = discount * discount_update
 			if self.cfg.episodic:
 				termination = torch.clip(termination + (self.model.termination(z, task) > 0.5).float(), max=1.)
 		action, _ = self.model.pi(z, task)
-		return G + discount * (1-termination) * self.model.Q(z, action, task, return_type='avg') , reward, reward_uncer, dyn_uncer , adjusted_reward
+		value  = G + discount * (1-termination) * self.model.Q(z, action, task, return_type='avg')
+		if eval_mode:
+			assert (reward_uncer == 0).all(), f"Non-zero reward_uncer in eval_mode: {reward_uncer}"
+			assert (dyn_uncer == 0).all(), f"Non-zero dyn_uncer in eval_mode: {dyn_uncer}"
+		else:
+			assert (reward_uncer >= 0).all(), f"Negative reward_uncer: {reward_uncer[reward_uncer < 0]}"
+			assert (dyn_uncer >= 0).all(), f"Negative dyn_uncer: {dyn_uncer[dyn_uncer < 0]}"
+		return value, reward, reward_uncer, dyn_uncer , adjusted_reward, reward_num_uncer
 
 	@torch.no_grad()
-	def _plan(self, obs, t0=False, eval_mode=False, task=None, planning_w_uncertainty=True):
+	def _plan(self, obs, t0=False, eval_mode=False, task=None):
 		"""
 		Plan a sequence of actions using the learned world model.
 
@@ -195,11 +203,11 @@ class TDMPC2(torch.nn.Module):
 				actions = actions * self.model._action_masks[task]
 
 			# Compute elite actions
-			value, pred_reward, reward_uncer, dyn_uncer , adjusted_pred_reward = self._estimate_value(z, actions, task, planning_w_uncertainty)
+			value, pred_reward, reward_uncer, dyn_uncer , adjusted_pred_reward , reward_num_uncer = self._estimate_value(z, actions, task, eval_mode)
 			value = value.nan_to_num(0)
 			elite_idxs = torch.topk(value.squeeze(1), self.cfg.num_elites, dim=0).indices
-			elite_value, elite_actions , elite_pred_rewards , elite_rew_uncer , elite_dyn_uncer , elite_adjusted_reward \
-			= value[elite_idxs], actions[:, elite_idxs] , pred_reward[elite_idxs], reward_uncer[elite_idxs], dyn_uncer[elite_idxs] , adjusted_pred_reward[elite_idxs]
+			elite_value, elite_actions , elite_pred_rewards , elite_rew_uncer , elite_dyn_uncer , elite_adjusted_reward , elite_num_rew_uncer \
+			= value[elite_idxs], actions[:, elite_idxs] , pred_reward[elite_idxs], reward_uncer[elite_idxs], dyn_uncer[elite_idxs] , adjusted_pred_reward[elite_idxs] ,  reward_num_uncer[elite_idxs]
 
 			# Update parameters
 			max_value = elite_value.max(0).values
@@ -217,6 +225,7 @@ class TDMPC2(torch.nn.Module):
 		actions = torch.index_select(elite_actions, 1, rand_idx).squeeze(1)
 		pred_values = torch.index_select(elite_value, 0, rand_idx).squeeze(1)
 		reward_uncer = torch.index_select(elite_rew_uncer, 0, rand_idx).squeeze(1)
+		reward_num_uncer = torch.index_select(elite_num_rew_uncer, 0, rand_idx).squeeze(1)
 		dyn_uncer = torch.index_select(elite_dyn_uncer, 0, rand_idx).squeeze(1)
 		adjusted_pred_reward = torch.index_select(elite_adjusted_reward, 0, rand_idx).squeeze(1)
 		pred_reward = torch.index_select(elite_pred_rewards, 0, rand_idx)
@@ -224,7 +233,7 @@ class TDMPC2(torch.nn.Module):
 		if not eval_mode:
 			a = a + std * torch.randn(self.cfg.action_dim, device=std.device)
 		self._prev_mean.copy_(mean)
-		return a.clamp(-1, 1), pred_values[0] , pred_reward[0], reward_uncer[0], dyn_uncer[0], adjusted_pred_reward[0]
+		return a.clamp(-1, 1), pred_values[0] , pred_reward[0], reward_uncer[0], dyn_uncer[0], adjusted_pred_reward[0], reward_num_uncer[0]
 
 	def update_pi(self, zs, task):
 		"""
@@ -342,7 +351,36 @@ class TDMPC2(torch.nn.Module):
 
 		reward_loss = nn.CrossEntropyLoss(ignore_index=-1)(logits, true_label)
 		return reward_loss
-	
+
+	def _compute_reward(self, z, actions, task):
+		pred_reward_ens = self.model.reward(z, actions, task).squeeze(-1)  # (5 x 512)
+		r_i = pred_reward_ens.unsqueeze(2)  # [M, N, 1]
+		r_j = pred_reward_ens.unsqueeze(1)  # [M, 1, N]
+
+		# Assign flipped labels as specified
+		preference = torch.where(
+			r_i > r_j, 0.0,
+			torch.where(r_i < r_j, 1.0, 0.5)
+		)  # shape: [M, N, N]
+		
+		# Compute std over ensemble members, ignoring NaNs
+		disagreement_std = torch.std(preference, dim=0 , unbiased=False)  # shape: [N, N]
+		
+		# Remove self-comparisons
+		disagreement_std.fill_diagonal_(0)
+
+		# Aggregate: mean disagreement for each sample across others
+		disagreement = disagreement_std.mean(dim=1)  # shape: [N]
+		# Just to to plot: to be removed
+		# Normalized Ensemble Standard Deviation
+		# normalize each model's predictions to zero mean and unit variance
+		model_mean = pred_reward_ens.mean(dim=1, keepdim=True)  # [M, 1]
+		model_std = pred_reward_ens.std(dim=1, keepdim=True) + 1e-8  # [M, 1]
+		pred_reward_normalized = (pred_reward_ens - model_mean) / model_std  # [M, N]
+		# Step 2: compute std across ensemble members 
+		normalized_std = pred_reward_normalized.std(dim=0, unbiased=False, keepdim=True).T  # [N, 1]
+		return pred_reward_ens.unsqueeze(-1) , disagreement.unsqueeze(-1) , normalized_std  # shape: [N,1]
+		
 	def _update(self, obs, action, reward, terminated, task=None):
 		# Compute targets
 		with torch.no_grad():

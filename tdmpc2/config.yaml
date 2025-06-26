@@ -9,10 +9,10 @@ episodic: false
 # evaluation
 checkpoint: ???
 eval_episodes: 10
-eval_freq: 10000
+eval_freq: 1000
 
 # training
-steps: 10_000_000
+steps: 1000000
 batch_size: 256
 reward_coef: 0.1
 value_coef: 0.1
@@ -27,8 +27,8 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: debug
-data_dir: /data/tdmpc2
+exp_name: seed_0_0_0
+data_dir: /data/tdmpc2_0_0_seed_1
 
 # planning
 mpc: true
@@ -77,7 +77,7 @@ mlp_reward_dim: 255
 latent_dim: 512
 task_dim: 96
 num_q: 5
-num_r: 5
+num_r: 10
 num_d: 5
 dropout: 0.01
 simnorm_dim: 8
@@ -90,8 +90,8 @@ enable_wandb: true
 save_csv: true
 
 # misc
-compile: true
-save_video: true
+compile: false
+save_video: false
 save_agent: true
 seed: 1
 
@@ -110,9 +110,9 @@ seed_steps: ???
 bin_size: ???
 
 #device 
-cuda_device: cuda:1
+cuda_device: cuda:0
 
 #planning w uncertainty
-rew_uncer_beta_coef: 10
-dyn_uncer_alpha_coef: 10
+rew_uncer_alpha_coef: 0
+dyn_uncer_beta_coef: 0
 evaluate_w_uncer: false

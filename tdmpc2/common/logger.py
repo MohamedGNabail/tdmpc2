@@ -130,12 +130,12 @@ class Logger:
 		wandb.init(
 			project=self.project,
 			entity=self.entity,
-			name=  str(cfg.exp_name) + "_" + str(cfg.task) + "_" + str(cfg.seed) + "_reward_" + str(cfg.rew_uncer_beta_coef) + "_dyn_" + str(cfg.dyn_uncer_alpha_coef) ,
+			name=  str(cfg.exp_name) + "_" + str(cfg.task) + "_" + str(cfg.seed) + "_reward_" + str(cfg.rew_uncer_alpha_coef) + "_dyn_" + str(cfg.dyn_uncer_beta_coef) ,
 			group=self._group,
 			tags=cfg_to_group(cfg, return_list=True) + [
 				f"seed:{cfg.seed}",
-				f"rew_uncer_beta:{cfg.rew_uncer_beta_coef}",
-				f"dyn_uncer_beta:{cfg.dyn_uncer_alpha_coef}",
+				f"rew_uncer_alpha:{cfg.rew_uncer_alpha_coef}",
+				f"dyn_uncer_beta:{cfg.dyn_uncer_beta_coef}",
 				],
 			dir=self._log_dir,
 			config=dataclasses.asdict(cfg),
