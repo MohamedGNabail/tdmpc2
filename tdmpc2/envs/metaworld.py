@@ -2,7 +2,7 @@ import numpy as np
 import gymnasium as gym
 from envs.wrappers.timeout import Timeout
 
-from metaworld.envs import ALL_V2_ENVIRONMENTS_GOAL_OBSERVABLE
+from metaworld.env_dict import ALL_V3_ENVIRONMENTS_GOAL_OBSERVABLE
 
 
 class MetaWorldWrapper(gym.Wrapper):
@@ -40,11 +40,11 @@ def make_env(cfg):
 	"""
 	Make Meta-World environment.
 	"""
-	env_id = cfg.task.split("-", 1)[-1] + "-v2-goal-observable"
-	if not cfg.task.startswith('mw-') or env_id not in ALL_V2_ENVIRONMENTS_GOAL_OBSERVABLE:
+	env_id = cfg.task.split("-", 1)[-1] + "-v3-goal-observable"
+	if not cfg.task.startswith('mw-') or env_id not in ALL_V3_ENVIRONMENTS_GOAL_OBSERVABLE:
 		raise ValueError('Unknown task:', cfg.task)
 	assert cfg.obs == 'state', 'This task only supports state observations.'
-	env = ALL_V2_ENVIRONMENTS_GOAL_OBSERVABLE[env_id](seed=cfg.seed , render_mode="rgb_array")
+	env = ALL_V3_ENVIRONMENTS_GOAL_OBSERVABLE[env_id](seed=cfg.seed , render_mode="rgb_array")
 	env = MetaWorldWrapper(env, cfg)
 	env = Timeout(env, max_episode_steps=100)
 	assert (env.max_episode_steps == env._max_episode_steps), 'Meta-World envs should have max_episode_steps=env._max_episode_steps'
