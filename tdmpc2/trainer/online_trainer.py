@@ -112,9 +112,6 @@ class OnlineTrainer(Trainer):
 			if self._step > self.cfg.seed_steps:
 				action, pred_value ,pred_reward, reward_uncer, dyn_uncer , adjusted_pred_reward , reward_num_uncer = self.agent.act(obs, t0=len(self._tds)==1)
 				action = action.cpu()
-				if self._step == 5000:
-					print(f'[{self._step}] Action: {action.numpy()}, Predicted Value: {pred_value}, Predicted Reward: {pred_reward}, Reward Uncertainty: {reward_uncer}, Dynamics Uncertainty: {dyn_uncer}, Adjusted Predicted Reward: {adjusted_pred_reward}, Reward Num Uncertainty: {reward_num_uncer}')
-					assert False
 			else:
 				action = self.env.rand_act()
 				pred_reward , pred_value, reward_uncer, dyn_uncer, adjusted_pred_reward, reward_num_uncer = 0,0,0,0,0,0

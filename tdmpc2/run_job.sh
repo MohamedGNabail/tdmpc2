@@ -1,28 +1,37 @@
 #!/bin/bash
-#SBATCH --job-name=tdmpc2_seed_1_0_1
+#SBATCH --job-name=10
 #SBATCH --output=logs/tdmpc2_%j.out
 #SBATCH --error=logs/tdmpc2_%j.err
-#SBATCH --time=0:08:00
+#SBATCH --time=12:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=8G
 #SBATCH --gres=gpu:1
 #SBATCH --account=def-rhinehar
 
-# Load Apptainer
 module load apptainer
 
-# Paths
-PROJECT_DIR=/home/nabail/projects/def-rhinehar/nabail/tdmpc2/tdmpc2
-SIF_PATH=/home/nabail/projects/def-rhinehar/nabail/ubp_app.sif
-SCRIPT_PATH=/home/nabail/projects/def-rhinehar/nabail/tdmpc2/tdmpc2/train.py
+# W&B config
+export WANDB_API_KEY=8a8ce7fbc7a816639a48369e34b70f2503528d06
+export WANDB_MODE=offline
+export WANDB_DIR=/mnt/tdmpc2/wandb_logs
+mkdir -p /home/nabail/projects/def-rhinehar/nabail/tdmpc2/wandb_logs
 
-# Run script inside Apptainer with environment activation
+# Paths
+SIF_PATH=/home/nabail/projects/def-rhinehar/nabail/ubp.sif
+SCRIPT_PATH=/mnt/tdmpc2/tdmpc2/train.py  # container-side path
+
+# Run script inside Apptainer
 apptainer exec --nv \
-  --bind /home/nabail/projects/def-rhinehar/nabail:/mnt \
+  --no-home \
+  --fakeroot \
+  --bind /home/nabail/projects/def-rhinehar/nabail/tdmpc2:/mnt/tdmpc2 \
   "$SIF_PATH" \
-  bash -c "
+  bash --login -c "
     source \"\$(conda info --base)/etc/profile.d/conda.sh\"
     conda activate ubp
-    export MUJOCO_GL=egl
-    python3 "$SCRIPT_PATH"
+    cd /mnt/tdmpc2
+    export MUJOCO_GL=disable
+    export WANDB_MODE=offline
+    export WANDB_DIR=/mnt/wandb_logs
+    python3 \"$SCRIPT_PATH\"
   "
