@@ -27,7 +27,7 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: seed_1
+exp_name: seed_2
 data_dir: ???
 
 # planning
@@ -93,7 +93,7 @@ save_csv: true
 compile: false
 save_video: false
 save_agent: true
-seed: 1
+seed: 2
 
 # convenience
 work_dir: ???
@@ -113,6 +113,6 @@ bin_size: ???
 cuda_device: cuda:0
 
 #planning w uncertainty
-rew_uncer_alpha_coef: 0
-dyn_uncer_beta_coef: ???
+rew_uncer_alpha_coef: ???
+dyn_uncer_beta_coef: 0
 evaluate_w_uncer: false
