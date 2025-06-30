@@ -12,7 +12,7 @@
 module load apptainer
 
 # Define dyn_uncer_beta_coef_value per array index (1 appears twice: index 0 and 1)
-beta_values=(1 1 2 3 4 5 6 7 8 9 10)
+beta_values=(0 1 1 2 3 4 5 6 7 8 9 10)
 beta=${beta_values[$SLURM_ARRAY_TASK_ID]}
 
 export WANDB_API_KEY=8a8ce7fbc7a816639a48369e34b70f2503528d06
@@ -34,5 +34,5 @@ apptainer exec --nv \
     export MUJOCO_GL=disable
     export WANDB_MODE=offline
     export WANDB_DIR=/mnt/wandb_logs
-    python3 '$SCRIPT_PATH' +rew_uncer_beta_coef_value=$beta
+    python3 '$SCRIPT_PATH' +rew_uncer_alpha_coef_value=$beta
   "

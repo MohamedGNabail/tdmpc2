@@ -47,7 +47,7 @@ def train(cfg: dict):
 	assert cfg.steps > 0, 'Must train for at least 1 step.'
 	cfg = parse_cfg(cfg)
 	cfg.rew_uncer_alpha_coef = cfg.get("rew_uncer_alpha_coef_value", 1.0)
-	cfg.data_dir = "/home/nabail/projects/def-rhinehar/nabail/logs/data/tdmpc2_seed_" + str(cfg.seed) + "_dyn_" + str(cfg.rew_uncer_alpha_coef)
+	cfg.data_dir = "/home/nabail/projects/def-rhinehar/nabail/logs/data/tdmpc2_seed_" + str(cfg.seed) + "_rew_" + str(cfg.rew_uncer_alpha_coef)
 	set_seed(cfg.seed)
 	print(colored('Work dir:', 'yellow', attrs=['bold']), cfg.work_dir)
 	trainer_cls = OfflineTrainer if cfg.multitask else OnlineTrainer
