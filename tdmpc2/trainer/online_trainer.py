@@ -35,7 +35,7 @@ class OnlineTrainer(Trainer):
 				self.logger.video.init(self.env, enabled=(i==0))
 			while not done:
 				torch.compiler.cudagraph_mark_step_begin()
-				action, _ , _, _, _ , _ , _ = self.agent.act(obs, t0=t==0, eval_mode=True)
+				action, _ , _, _, _ , _ , _ , _= self.agent.act(obs, t0=t==0, eval_mode=True)
 				action = action.cpu()
 				obs, reward, done, info = self.env.step(action)
 				ep_reward += reward
@@ -110,11 +110,11 @@ class OnlineTrainer(Trainer):
 
 			# Collect experience
 			if self._step > self.cfg.seed_steps:
-				action, pred_value ,pred_reward, reward_uncer, dyn_uncer , adjusted_pred_reward , reward_num_uncer = self.agent.act(obs, t0=len(self._tds)==1)
+				action, pred_value ,pred_reward, reward_uncer, dyn_uncer , adjusted_pred_reward , reward_num_uncer , aleatoric_uncer = self.agent.act(obs, t0=len(self._tds)==1)
 				action = action.cpu()
 			else:
 				action = self.env.rand_act()
-				pred_reward , pred_value, reward_uncer, dyn_uncer, adjusted_pred_reward, reward_num_uncer = 0,0,0,0,0,0
+				pred_reward , pred_value, reward_uncer, dyn_uncer, adjusted_pred_reward, reward_num_uncer, aleatoric_uncer = 0,0,0,0,0,0,0
 			obs, reward, done, info = self.env.step(action)
 			# Store in point cloud
 			self._obs_pointcloud[self._obs_index, :3] = obs[:3].numpy()
@@ -127,6 +127,7 @@ class OnlineTrainer(Trainer):
 					reward_uncer=reward_uncer,
 					reward_num_uncer=reward_num_uncer,
 					dyn_uncer=dyn_uncer,
+					aleatoric_uncer = aleatoric_uncer,
 					adjusted_pred_reward=adjusted_pred_reward)
 			if self.cfg.enable_wandb and self._step % 50000 == 0:
 				voxel_grid.update(self._obs_pointcloud)

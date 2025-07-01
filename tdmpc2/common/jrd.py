@@ -54,4 +54,4 @@ class JensenRenyiDivergence():
         # shape: (n_actors)
         utility = entropy_mean - mean_entropy
 
-        return utility
+        return utility , mean_entropy

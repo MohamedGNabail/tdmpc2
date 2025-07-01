@@ -125,16 +125,18 @@ class EnsembleStochasticLinear(torch.nn.Module):
         x = self.act(self.lin4(x))
         x = self.lin5(x)
 
-        mu = x[:, :, :self.n_output]
+        mu = x[:, :, :self.n_output] #[5,24,512]
         log_std = x[:, :, self.n_output:]
         log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
 
         std = torch.exp(log_std)
         jrd_div = JensenRenyiDivergence(
             states_mean=mu, states_var=std.square()).compute_measure()
-        dis = jrd_div.abs().unsqueeze(1)
-        return mu, log_std , dis
-        
+        epi_dis, aleatoric_dis = jrd_div
+        epistemic = epi_dis.abs().unsqueeze(1) #[24x1]
+        aleatoric  =  aleatoric_dis.abs().unsqueeze(1) #[24x1]
+        return mu, log_std , epistemic, aleatoric
+
     def single_forward(self, x, index):
         prev_x = x.clone().detach()  # save previous state
         x = self.act(self.lin1.single_forward(x, index))

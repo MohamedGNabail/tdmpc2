@@ -120,9 +120,9 @@ class WorldModel(nn.Module):
 		if self.cfg.multitask:
 			z = self.task_emb(z, task)
 		z = torch.cat([z, a], dim=-1) #( 24 x 516) batch size x latent_dim + action_dim
-		pred , _ , disagreement = self._dynamics(z)  # mu: (5 x 24 x 512) num_ensemble x batch size x latent_dim , log_std: (5 x 24 x 512) ,  disagreement: (24 x 516) batch size x 1	 (probabilistic output)
+		pred , _ , disagreement , aleatoric = self._dynamics(z)  # mu: (5 x 24 x 512) num_ensemble x batch size x latent_dim , log_std: (5 x 24 x 512) ,  disagreement: (24 x 516) batch size x 1	 (probabilistic output)
 		#pred = self._dynamics(z)                    # ensemeble_output: (5 x 24 x 512) num_ensemble x batch size x latent_dim (deterministic output)
-		return pred , disagreement
+		return pred , disagreement , aleatoric 
 
 	def reward(self, z, a, task):
 		"""

@@ -133,7 +133,7 @@ class TDMPC2(torch.nn.Module):
 			# reward_ens = math.two_hot_inv(reward_ens, self.cfg) removed because the preference model is deterministic
 			reward_ens, reward_disagreement, reward_numeric_uncer = self._compute_reward(z, actions[t], task)
 			reward = reward_ens.mean(dim=0)
-			z_ens , dyn_disagreement = self.model.next(z, actions[t], task)                    #(5 x 512 x 512) num_ensemble x batch_size x latent_dim , (512 x 1) batch_size x 1
+			z_ens , dyn_disagreement , aleatoric_uncer = self.model.next(z, actions[t], task)                    #(5 x 512 x 512) num_ensemble x batch_size x latent_dim , (512 x 1) batch_size x 1
 			z = z_ens.mean(dim=0)                                                              #(512 x 512) batch_size x latent_dim
 			dyn_uncer_beta_coef = 0 if eval_mode else self.cfg.dyn_uncer_beta_coef
 			rew_uncer_alpha_coef = 0 if eval_mode else self.cfg.rew_uncer_alpha_coef
@@ -154,7 +154,7 @@ class TDMPC2(torch.nn.Module):
 		else:
 			assert (reward_uncer >= 0).all(), f"Negative reward_uncer: {reward_uncer[reward_uncer < 0]}"
 			assert (dyn_uncer >= 0).all(), f"Negative dyn_uncer: {dyn_uncer[dyn_uncer < 0]}"
-		return value, reward, reward_uncer, dyn_uncer , adjusted_reward, reward_num_uncer
+		return value, reward, reward_uncer, dyn_uncer , adjusted_reward, reward_num_uncer , aleatoric_uncer
 
 	@torch.no_grad()
 	def _plan(self, obs, t0=False, eval_mode=False, task=None):
@@ -177,7 +177,7 @@ class TDMPC2(torch.nn.Module):
 			_z = z.repeat(self.cfg.num_pi_trajs, 1)
 			for t in range(self.cfg.horizon-1):
 				pi_actions[t], _ = self.model.pi(_z, task)
-				z_ens , _ = self.model.next(_z, pi_actions[t], task)
+				z_ens , _ , _ = self.model.next(_z, pi_actions[t], task)
 				_z = z_ens.mean(dim=0)  # Use mean of ensemble predictions
 				pi_actions[-1], _ = self.model.pi(_z, task)
 
@@ -203,11 +203,11 @@ class TDMPC2(torch.nn.Module):
 				actions = actions * self.model._action_masks[task]
 
 			# Compute elite actions
-			value, pred_reward, reward_uncer, dyn_uncer , adjusted_pred_reward , reward_num_uncer = self._estimate_value(z, actions, task, eval_mode)
+			value, pred_reward, reward_uncer, dyn_uncer , adjusted_pred_reward , reward_num_uncer , aleatoric_uncer = self._estimate_value(z, actions, task, eval_mode)
 			value = value.nan_to_num(0)
 			elite_idxs = torch.topk(value.squeeze(1), self.cfg.num_elites, dim=0).indices
-			elite_value, elite_actions , elite_pred_rewards , elite_rew_uncer , elite_dyn_uncer , elite_adjusted_reward , elite_num_rew_uncer \
-			= value[elite_idxs], actions[:, elite_idxs] , pred_reward[elite_idxs], reward_uncer[elite_idxs], dyn_uncer[elite_idxs] , adjusted_pred_reward[elite_idxs] ,  reward_num_uncer[elite_idxs]
+			elite_value, elite_actions , elite_pred_rewards , elite_rew_uncer , elite_dyn_uncer , elite_adjusted_reward , elite_num_rew_uncer , elite_aleatoric_uncer \
+			= value[elite_idxs], actions[:, elite_idxs] , pred_reward[elite_idxs], reward_uncer[elite_idxs], dyn_uncer[elite_idxs] , adjusted_pred_reward[elite_idxs] ,  reward_num_uncer[elite_idxs], aleatoric_uncer[elite_idxs]
 
 			# Update parameters
 			max_value = elite_value.max(0).values
@@ -226,6 +226,7 @@ class TDMPC2(torch.nn.Module):
 		pred_values = torch.index_select(elite_value, 0, rand_idx).squeeze(1)
 		reward_uncer = torch.index_select(elite_rew_uncer, 0, rand_idx).squeeze(1)
 		reward_num_uncer = torch.index_select(elite_num_rew_uncer, 0, rand_idx).squeeze(1)
+		aleatoric_uncer = torch.index_select(elite_aleatoric_uncer, 0, rand_idx).squeeze(1)
 		dyn_uncer = torch.index_select(elite_dyn_uncer, 0, rand_idx).squeeze(1)
 		adjusted_pred_reward = torch.index_select(elite_adjusted_reward, 0, rand_idx).squeeze(1)
 		pred_reward = torch.index_select(elite_pred_rewards, 0, rand_idx)
@@ -233,7 +234,7 @@ class TDMPC2(torch.nn.Module):
 		if not eval_mode:
 			a = a + std * torch.randn(self.cfg.action_dim, device=std.device)
 		self._prev_mean.copy_(mean)
-		return a.clamp(-1, 1), pred_values[0] , pred_reward[0], reward_uncer[0], dyn_uncer[0], adjusted_pred_reward[0], reward_num_uncer[0]
+		return a.clamp(-1, 1), pred_values[0] , pred_reward[0], reward_uncer[0], dyn_uncer[0], adjusted_pred_reward[0], reward_num_uncer[0], aleatoric_uncer[0]
 
 	def update_pi(self, zs, task):
 		"""
@@ -305,7 +306,7 @@ class TDMPC2(torch.nn.Module):
 		for member, idx in enumerate(split_indices):
 			for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
 				# Predict next latent state for all ensemble members, then select this member's
-				z_ens , _ = self.model.next(z[idx], _action[idx], task)  # shape [ensemble_size, chunk_size, latent_dim]
+				z_ens , _ , _ = self.model.next(z[idx], _action[idx], task)  # shape [ensemble_size, chunk_size, latent_dim]
 				z[idx] = z_ens[member]  # shape [chunk_size, latent_dim]
 
 				# Compute loss and update latent
@@ -396,7 +397,7 @@ class TDMPC2(torch.nn.Module):
 		zs[0] = z
 		consistency_loss = 0
 		for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
-			ensemble_pred , _ = self.model.next(z, _action, task)  # shape [batch_size, latent_dim]
+			ensemble_pred , _ , _= self.model.next(z, _action, task)  # shape [batch_size, latent_dim]
 			z = ensemble_pred.mean(dim=0) 
 			consistency_loss = consistency_loss + F.mse_loss(z, _next_z) * self.cfg.rho**t
 			zs[t+1] = z

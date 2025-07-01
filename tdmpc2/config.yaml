@@ -114,5 +114,5 @@ cuda_device: cuda:0
 
 #planning w uncertainty
 rew_uncer_alpha_coef: ???
-dyn_uncer_beta_coef: 0
+dyn_uncer_beta_coef: 1
 evaluate_w_uncer: false
