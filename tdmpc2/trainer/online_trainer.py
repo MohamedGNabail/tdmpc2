@@ -129,7 +129,7 @@ class OnlineTrainer(Trainer):
 					dyn_uncer=dyn_uncer,
 					aleatoric_uncer = aleatoric_uncer,
 					adjusted_pred_reward=adjusted_pred_reward)
-			if self.cfg.enable_wandb and self._step % 50000 == 0:
+			if self.cfg.enable_wandb and self._step % 100000 == 0:
 				voxel_grid.update(self._obs_pointcloud)
 				entropy, coverage = voxel_grid.compute_entropy()
 				obs_valid = self._obs_pointcloud[:self._obs_index]
