@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from tensordict import from_modules
 from copy import deepcopy
 from common.jrd import JensenRenyiDivergence
+from common.bc import BhattacharyyaOverlap
 import math 
 class EnsembleLinear(nn.Module):
 
@@ -77,11 +78,11 @@ class EnsembleLinear(nn.Module):
 
 
 class EnsembleStochasticLinear(torch.nn.Module):
-    def __init__(self, in_features, hidden_features, out_features, ensemble_size=3, activation='relu'):
+    def __init__(self, in_features, hidden_features, out_features, ensemble_size=3, activation='relu' , uncertainity = "JRD"):
         super(EnsembleStochasticLinear, self).__init__()
         self.ensemble_size = ensemble_size
         self.n_output = out_features
-
+        self.uncertainity = uncertainity   
         self.lin1 = EnsembleLinear(in_features=in_features,
                                    out_features=hidden_features, ensemble_size=self.ensemble_size, bias=True)
         self.lin2 = EnsembleLinear(in_features=hidden_features,
@@ -116,11 +117,15 @@ class EnsembleStochasticLinear(torch.nn.Module):
         log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
 
         std = torch.exp(log_std)
-        
-        jrd_div = JensenRenyiDivergence(states_mean=mu, states_var=std.square()).compute_measure()
-        epi_dis, aleatoric_dis = jrd_div
-        epistemic = epi_dis.abs().unsqueeze(1) #[24x1]
-        aleatoric  =  aleatoric_dis.abs().unsqueeze(1) #[24x1]
+        if self.uncertainity == "BC":
+            bc = BhattacharyyaOverlap(states_mean=mu, states_std=std).compute_measure()
+            epistemic = bc[0].unsqueeze(1)  # [batch_size x1]
+            aleatoric = std.mean(dim=0).mean(dim=-1).unsqueeze(1)  # [batch_sizex1]
+        else:
+            jrd_div = JensenRenyiDivergence(states_mean=mu, states_var=std.square()).compute_measure()
+            epi_dis, aleatoric_dis = jrd_div
+            epistemic = epi_dis.abs().unsqueeze(1) #[24x1]
+            aleatoric  =  aleatoric_dis.abs().unsqueeze(1) #[24x1]
         return mu, epistemic, aleatoric
 
     def single_forward(self, x, index):

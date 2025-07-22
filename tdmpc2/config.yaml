@@ -27,7 +27,7 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: RND_ACT
+exp_name: BCN_UBP
 data_dir: ???
 
 # planning
@@ -97,7 +97,8 @@ cuda_device: cuda:0
 
 #planning w uncertainty
 rew_uncer_alpha_coef: 0
-dyn_uncer_beta_coef: 0
+dyn_uncer_beta_coef: 2
 evaluate_w_uncer: false
 independant_updates: true
 planning_criteria: ubp_reward
+uncertainity_rep: BC
