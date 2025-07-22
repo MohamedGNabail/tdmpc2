@@ -12,7 +12,6 @@ class EnsembleLinear(nn.Module):
         self.ensemble_size = ensemble_size
         self.in_features = in_features
         self.out_features = out_features
-        # self.weights = torch.Tensor(ensemble_size, in_features, out_features)
         if bias:
             self.biases = torch.Tensor(ensemble_size, 1, out_features)
         else:
@@ -28,20 +27,7 @@ class EnsembleLinear(nn.Module):
         else:
             self.layernorms = None
 
-    # def reset_parameters(self):
-    #     for w in self.weights:
-    #         w.transpose_(0, 1)
-    #         nn.init.kaiming_uniform_(w, a=math.sqrt(5))
-    #         w.transpose_(0, 1)
 
-    #     self.weights = nn.Parameter(self.weights)
-
-    #     if self.biases is not None:
-    #         fan_in, _ = nn.init._calculate_fan_in_and_fan_out(
-    #             self.weights[0].T)
-    #         bound = 1 / math.sqrt(fan_in)
-    #         nn.init.uniform_(self.biases, -bound, bound)
-    #         self.biases = nn.Parameter(self.biases)
     def reset_parameters(self):
         self.weights = nn.Parameter(torch.empty(self.ensemble_size, self.in_features, self.out_features))
         nn.init.kaiming_uniform_(self.weights, a=math.sqrt(5))
@@ -117,25 +103,25 @@ class EnsembleStochasticLinear(torch.nn.Module):
         self.log_std_min = -20
         self.log_std_max = 1  # 2
 
-    def forward(self, x):
+    def forward(self, x): # during planning (512, 516) Sample Size x Latent Dimension + Action
         prev_x = x.clone().detach()  # save previous state (history)
         x = self.act(self.lin1(x))
         x = self.act(self.lin2(x))
         x = self.act(self.lin3(x))
         x = self.act(self.lin4(x))
-        x = self.lin5(x)
+        x = self.lin5(x)             #[5,1,1024]
 
-        mu = x[:, :, :self.n_output] #[5,24,512]
+        mu = x[:, :, :self.n_output] #[5,24,512] during planning 5 x 512 x 516
         log_std = x[:, :, self.n_output:]
         log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
 
         std = torch.exp(log_std)
-        jrd_div = JensenRenyiDivergence(
-            states_mean=mu, states_var=std.square()).compute_measure()
+        
+        jrd_div = JensenRenyiDivergence(states_mean=mu, states_var=std.square()).compute_measure()
         epi_dis, aleatoric_dis = jrd_div
         epistemic = epi_dis.abs().unsqueeze(1) #[24x1]
         aleatoric  =  aleatoric_dis.abs().unsqueeze(1) #[24x1]
-        return mu, log_std , epistemic, aleatoric
+        return mu, epistemic, aleatoric
 
     def single_forward(self, x, index):
         prev_x = x.clone().detach()  # save previous state
@@ -148,7 +134,8 @@ class EnsembleStochasticLinear(torch.nn.Module):
         mu = x[:, :, :self.n_output]
         log_std = x[:, :, self.n_output:]
         log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
-        yhat = mu.squeeze(dim=0), log_std.squeeze(dim=0)  # indexing 0
+        var = torch.exp(log_std)**2
+        yhat = mu.squeeze(dim=0), var.squeeze(dim=0)  # indexing 0
 
         return yhat
     

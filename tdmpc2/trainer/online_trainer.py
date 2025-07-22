@@ -35,7 +35,7 @@ class OnlineTrainer(Trainer):
 				self.logger.video.init(self.env, enabled=(i==0))
 			while not done:
 				torch.compiler.cudagraph_mark_step_begin()
-				action, _ , _, _, _ , _ , _ , _= self.agent.act(obs, t0=t==0, eval_mode=True)
+				action, action_info = self.agent.act(obs, t0=t==0, eval_mode=True)
 				action = action.cpu()
 				obs, reward, done, info = self.env.step(action)
 				ep_reward += reward
@@ -110,25 +110,26 @@ class OnlineTrainer(Trainer):
 
 			# Collect experience
 			if self._step > self.cfg.seed_steps:
-				action, pred_value ,pred_reward, reward_uncer, dyn_uncer , adjusted_pred_reward , reward_num_uncer , aleatoric_uncer = self.agent.act(obs, t0=len(self._tds)==1)
-				action = action.cpu()
+				action, action_info = self.agent.act(obs, t0=len(self._tds)==1)
 			else:
-				action = self.env.rand_act()
-				pred_reward , pred_value, reward_uncer, dyn_uncer, adjusted_pred_reward, reward_num_uncer, aleatoric_uncer = 0,0,0,0,0,0,0
+				action , action_info = self.agent.rand_act(obs, self.env)
+			action = action.cpu()
 			obs, reward, done, info = self.env.step(action)
 			# Store in point cloud
 			self._obs_pointcloud[self._obs_index, :3] = obs[:3].numpy()
 			self._obs_pointcloud[self._obs_index, 3:] = [0, 255, 0]
 			self._obs_index += 1
 			train_metrics.update(
-					step =self._step,
-					pred_value=pred_value,
-					pred_reward=pred_reward,
-					reward_uncer=reward_uncer,
-					reward_num_uncer=reward_num_uncer,
-					dyn_uncer=dyn_uncer,
-					aleatoric_uncer = aleatoric_uncer,
-					adjusted_pred_reward=adjusted_pred_reward)
+				step=self._step,
+				value=action_info["value"],
+				pred_reward=action_info["reward"],
+				reward_epistemic=action_info["reward_epistemic"],
+				reward_aleatoric=action_info["reward_aleatoric"],
+				dyn_epistemic=action_info["dyn_epistemic"],
+				dyn_aleatoric=action_info["dyn_aleatoric"],
+				ubp_reward=action_info["ubp_reward"],
+				true_reward = reward
+			)
 			if self.cfg.enable_wandb and self._step % 100000 == 0:
 				voxel_grid.update(self._obs_pointcloud)
 				entropy, coverage = voxel_grid.compute_entropy()

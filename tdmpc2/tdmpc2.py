@@ -5,6 +5,7 @@ from common import math
 from common.scale import RunningScale
 from common.world_model import WorldModel
 from common.layers import api_model_conversion
+from common.loss import gaussian_nll_loss
 from tensordict import TensorDict
 
 from itertools import combinations
@@ -26,8 +27,8 @@ class TDMPC2(torch.nn.Module):
 			{'params': self.model._encoder.parameters(), 'lr': self.cfg.lr*self.cfg.enc_lr_scale},
 			{'params': self.model._dynamics.parameters()},
 			{'params': self.model._reward.parameters()},
-			{'params': self.model._termination.parameters() if self.cfg.episodic else []},
-			{'params': self.model._Qs.parameters()},
+			{'params': self.model._termination.parameters() if self.cfg.episodic else [] , 'lr': self.cfg.lr / self.cfg.num_r_d},
+			{'params': self.model._Qs.parameters() , 'lr': self.cfg.lr / self.cfg.num_r_d},
 			{'params': self.model._task_emb.parameters() if self.cfg.multitask else []
 			 }
 		], lr=self.cfg.lr, capturable=True)
@@ -99,6 +100,56 @@ class TDMPC2(torch.nn.Module):
 		return
 
 	@torch.no_grad()
+	def rand_act(self, obs, env, eval_mode=False, task=None):
+		"""
+		Plan a sequence of actions using the learned world model.
+
+		Args:
+			obs (torch.Tensor): Observation from environment.
+			env: Environment instance.
+			eval_mode (bool): If True, turn off uncertainty bonuses.
+			task (int): Task index (only used for multi-task experiments).
+
+		Returns:
+			action (torch.Tensor): Action to take (shape: [action_dim]).
+			info (dict): Dictionary of extra outputs like reward and uncertainty terms.
+		"""
+		obs = obs.to(self.device, non_blocking=True).unsqueeze(0)  # [1, obs_dim]
+		action = env.rand_act()
+		action = torch.tensor(action, dtype=torch.float32, device=self.device).unsqueeze(0)  # [1, act_dim]
+
+		if task is not None:
+			task = torch.tensor([task], device=self.device)
+
+		# Encode observation
+		z = self.model.encode(obs, task)  # [1, latent_dim]
+
+		# Reward prediction
+		reward, reward_epi_uncer, reward_aleatoric_uncer = self.model.reward(z, action, task)
+
+		# Transition prediction
+		z, dyn_epi_uncer, dyn_aleatoric_uncer = self.model.next(z, action, task)
+
+		# Uncertainty weighting (disabled during eval)
+		dyn_beta = 0 if eval_mode else self.cfg.dyn_uncer_beta_coef
+		rew_alpha = 0 if eval_mode else self.cfg.rew_uncer_alpha_coef
+
+		adjusted_reward = reward + (rew_alpha * reward_epi_uncer) + (dyn_beta * dyn_epi_uncer)
+
+		# Collect info
+		info = {
+			"value" : 0 ,
+			"reward": reward.squeeze(0),                     # scalar
+			"reward_epistemic": reward_epi_uncer.squeeze(0), # scalar
+			"reward_aleatoric": reward_aleatoric_uncer.squeeze(0), # scalar
+			"dyn_epistemic": dyn_epi_uncer.squeeze(0),       # scalar
+			"dyn_aleatoric": dyn_aleatoric_uncer.squeeze(0), # scalar
+			"ubp_reward": adjusted_reward.squeeze(0),   # scalar
+		}
+		#TODO: Nitpicking value is not calculated for rand action, and since ubp does not use value, it is not needed now but it would be a nice plot to have 
+		return action.clamp(-1, 1).squeeze(0), info
+
+	@torch.no_grad()
 	def act(self, obs, t0=False, eval_mode=False, task=None):
 		"""
 		Select an action by planning in the latent space of the world model.
@@ -125,36 +176,71 @@ class TDMPC2(torch.nn.Module):
 
 	@torch.no_grad()
 	def _estimate_value(self, z, actions, task, eval_mode=False):
-		"""Estimate value of a trajectory starting at latent state z and executing given actions."""
-		G, discount = 0, 1
-		termination = torch.zeros(self.cfg.num_samples, 1, dtype=torch.float32, device=z.device)
-		for t in range(self.cfg.horizon):
+		"""Estimate value of a trajectory starting at latent state z and executing given actions.
+		eval: N = number of samples 512, num_ensemble = 5 , D = 512
+			z = [512,512] [N , D]
+			actions = [3,512,4] [T, N , A]
+			eval_mode = True
+		"""
 
+		# Accumulators for summing over time
+		termination = torch.zeros(self.cfg.num_samples, 1, dtype=torch.float32, device=z.device)
+		G          = torch.zeros_like(z[:, :1])      # [N,1]
+		R          = torch.zeros_like(z[:, :1])
+		discount   = torch.ones(1, device=z.device)  # scalar tensor
+		ubp_reward = torch.zeros_like(z[:, :1])
+		epi_rew    = torch.zeros_like(z[:, :1])
+		alea_rew   = torch.zeros_like(z[:, :1])
+		epi_dyn    = torch.zeros_like(z[:, :1])
+		alea_dyn   = torch.zeros_like(z[:, :1])
+
+		for t in range(self.cfg.horizon):
 			# reward_ens = math.two_hot_inv(reward_ens, self.cfg) removed because the preference model is deterministic
-			reward_ens, reward_disagreement, reward_numeric_uncer = self._compute_reward(z, actions[t], task)
-			reward = reward_ens.mean(dim=0)
-			z_ens , dyn_disagreement , aleatoric_uncer = self.model.next(z, actions[t], task)                    #(5 x 512 x 512) num_ensemble x batch_size x latent_dim , (512 x 1) batch_size x 1
-			z = z_ens.mean(dim=0)                                                              #(512 x 512) batch_size x latent_dim
-			dyn_uncer_beta_coef = 0 if eval_mode else self.cfg.dyn_uncer_beta_coef
-			rew_uncer_alpha_coef = 0 if eval_mode else self.cfg.rew_uncer_alpha_coef
-			dyn_uncer = dyn_uncer_beta_coef * dyn_disagreement                                #(512 x 1) batch_size x 1
-			reward_uncer = rew_uncer_alpha_coef * reward_disagreement                           #(512 x 1) batch_size x 1
-			reward_num_uncer = rew_uncer_alpha_coef * reward_numeric_uncer                           #(512 x 1) batch_size x 1
-			adjusted_reward = reward + reward_uncer + dyn_uncer
-			G = G + discount * (1-termination) * adjusted_reward
+			# Reward prediction: reward =  [N , 1] , reward_epi_uncer = [N , 1] , reward_aleatoric_uncer = [N, 1]
+			reward, reward_epi_uncer, reward_aleatoric_uncer = self.model.reward(z, actions[t], task)
+			
+			# Dynamics prediction
+			# Next State prediction: reward =  [N , D] , reward_epi_uncer = [N , 1] , reward_aleatoric_uncer = [N, 1]
+			z, dyn_epi_uncer, dyn_aleatoric_uncer = self.model.next(z, actions[t], task)
+
+			dyn_beta = 0 if eval_mode else self.cfg.dyn_uncer_beta_coef
+			rew_alpha = 0 if eval_mode else self.cfg.rew_uncer_alpha_coef
+
+			# Adjusted reward (reward bonus shaping)
+			adjusted_reward = reward + (rew_alpha * reward_epi_uncer) + (dyn_beta * dyn_epi_uncer)
+			G = G + discount * (1 - termination) * adjusted_reward
+
+			# Discount update
 			discount_update = self.discount[torch.tensor(task)] if self.cfg.multitask else self.discount
 			discount = discount * discount_update
+
+			# Termination update
 			if self.cfg.episodic:
 				termination = torch.clip(termination + (self.model.termination(z, task) > 0.5).float(), max=1.)
+
+			# Sum all quantities over time [N,1]
+			R = R + reward
+			ubp_reward += adjusted_reward
+			epi_rew += reward_epi_uncer
+			alea_rew += reward_aleatoric_uncer
+			epi_dyn += dyn_epi_uncer
+			alea_dyn += dyn_aleatoric_uncer
+
+		# Bootstrap value from final state
 		action, _ = self.model.pi(z, task)
-		value  = G + discount * (1-termination) * self.model.Q(z, action, task, return_type='avg')
-		if eval_mode:
-			assert (reward_uncer == 0).all(), f"Non-zero reward_uncer in eval_mode: {reward_uncer}"
-			assert (dyn_uncer == 0).all(), f"Non-zero dyn_uncer in eval_mode: {dyn_uncer}"
-		else:
-			assert (reward_uncer >= 0).all(), f"Negative reward_uncer: {reward_uncer[reward_uncer < 0]}"
-			assert (dyn_uncer >= 0).all(), f"Negative dyn_uncer: {dyn_uncer[dyn_uncer < 0]}"
-		return value, reward, reward_uncer, dyn_uncer , adjusted_reward, reward_num_uncer , aleatoric_uncer
+		value = G + discount * (1 - termination) * self.model.Q(z, action, task, return_type='avg')
+		# Info for logging
+		info = {
+			"reward" : R,
+			"reward_epistemic": epi_rew,
+			"reward_aleatoric": alea_rew,
+			"dynamics_epistemic": epi_dyn,
+			"dynamics_aleatoric": alea_dyn
+		}
+		value = value.nan_to_num(0)
+		ubp_reward = ubp_reward.nan_to_num(0)
+		return value, ubp_reward, info
+
 
 	@torch.no_grad()
 	def _plan(self, obs, t0=False, eval_mode=False, task=None):
@@ -162,39 +248,46 @@ class TDMPC2(torch.nn.Module):
 		Plan a sequence of actions using the learned world model.
 
 		Args:
-			z (torch.Tensor): Latent state from which to plan.
+			obs(torch.Tensor): state from which to plan. [1,39]
 			t0 (bool): Whether this is the first observation in the episode.
-			eval_mode (bool): Whether to use the mean of the action distribution.
+			eval_mode (bool): Whether to use the uncertainties in reward and dynamics in planning, if true , uncertainty is not used
 			task (Torch.Tensor): Task index (only used for multi-task experiments).
 
 		Returns:
 			torch.Tensor: Action to take in the environment.
 		"""
-		# Sample policy trajectories
+		# Latent Space encoding for the current observation [1,Latent Dimension D]
 		z = self.model.encode(obs, task)
+
+		# Sample policy trajectories [24]
 		if self.cfg.num_pi_trajs > 0:
 			pi_actions = torch.empty(self.cfg.horizon, self.cfg.num_pi_trajs, self.cfg.action_dim, device=self.device)
+			# Repeated State [self.cfg.num_pi_trajs, D]
 			_z = z.repeat(self.cfg.num_pi_trajs, 1)
+			# Actions sampled from policy [T,self.cfg.num_pi_trajs,A]
 			for t in range(self.cfg.horizon-1):
 				pi_actions[t], _ = self.model.pi(_z, task)
-				z_ens , _ , _ = self.model.next(_z, pi_actions[t], task)
-				_z = z_ens.mean(dim=0)  # Use mean of ensemble predictions
-				pi_actions[-1], _ = self.model.pi(_z, task)
+				_z , _ , _ = self.model.next(_z, pi_actions[t], task)
+			pi_actions[-1], _ = self.model.pi(_z, task)
 
 		# Initialize state and parameters
+		# Repeated State [N, D]
 		z = z.repeat(self.cfg.num_samples, 1)
+		#Mean for action [T, A]
 		mean = torch.zeros(self.cfg.horizon, self.cfg.action_dim, device=self.device)
+		#std for action [T, A]
 		std = torch.full((self.cfg.horizon, self.cfg.action_dim), self.cfg.max_std, dtype=torch.float, device=self.device)
 		if not t0:
 			mean[:-1] = self._prev_mean[1:]
+		
+		#Actions  are [T, N , A] filling the first self.cfg.num_pi_trajs number of them with [T, self.cfg.num_pi_trajs , A]
 		actions = torch.empty(self.cfg.horizon, self.cfg.num_samples, self.cfg.action_dim, device=self.device)
 		if self.cfg.num_pi_trajs > 0:
 			actions[:, :self.cfg.num_pi_trajs] = pi_actions
-
 		# Iterate MPPI
 		for _ in range(self.cfg.iterations):
 
-			# Sample actions
+			# Sample actions for non policy sampled actions (empty ones)
 			r = torch.randn(self.cfg.horizon, self.cfg.num_samples-self.cfg.num_pi_trajs, self.cfg.action_dim, device=std.device)
 			actions_sample = mean.unsqueeze(1) + std.unsqueeze(1) * r
 			actions_sample = actions_sample.clamp(-1, 1)
@@ -202,40 +295,61 @@ class TDMPC2(torch.nn.Module):
 			if self.cfg.multitask:
 				actions = actions * self.model._action_masks[task]
 
-			# Compute elite actions
-			value, pred_reward, reward_uncer, dyn_uncer , adjusted_pred_reward , reward_num_uncer , aleatoric_uncer = self._estimate_value(z, actions, task, eval_mode)
-			value = value.nan_to_num(0)
-			elite_idxs = torch.topk(value.squeeze(1), self.cfg.num_elites, dim=0).indices
-			elite_value, elite_actions , elite_pred_rewards , elite_rew_uncer , elite_dyn_uncer , elite_adjusted_reward , elite_num_rew_uncer , elite_aleatoric_uncer \
-			= value[elite_idxs], actions[:, elite_idxs] , pred_reward[elite_idxs], reward_uncer[elite_idxs], dyn_uncer[elite_idxs] , adjusted_pred_reward[elite_idxs] ,  reward_num_uncer[elite_idxs], aleatoric_uncer[elite_idxs]
+			# Compute value, reward, and associated uncertainty info 
+			# value : [N,1] , ubp_reward[N,1] , infos [N, 1]
+			value, ubp_reward, info = self._estimate_value(z, actions, task, eval_mode)
+			
 
-			# Update parameters
-			max_value = elite_value.max(0).values
-			score = torch.exp(self.cfg.temperature*(elite_value - max_value))
+			# Define metrics with default fallback to "ubp_reward"
+			planning_metric_map = {
+				"total_value": value.squeeze(1),
+				"ubp_reward": ubp_reward.squeeze(1),
+			}
+			metric_key = getattr(self.cfg, "planning_criteria", "ubp_reward")
+			metric_values = planning_metric_map.get(metric_key, planning_metric_map["ubp_reward"]) #the ubp reward [N,1]
+
+			# Top-k selection [64]
+			elite_idxs = torch.topk(metric_values, self.cfg.num_elites, dim=0).indices  # [num_elites]
+
+			# Extract elite values and actions
+			elite_value = value[elite_idxs]                   # [num_elites, 1]
+			elite_ubp_reward = ubp_reward[elite_idxs]         # [num_elites, 1]
+			elite_actions = actions[:, elite_idxs]            # [horizon, num_elites, action_dim]
+
+			# Extract elite info tensors
+			elite_info = {k: v[elite_idxs] for k, v in info.items()}  #[ num elites, 1]
+
+			# Elite scoring
+			elite_metric = metric_values[elite_idxs].unsqueeze(1)        # [num_elites, 1]
+			max_metric = elite_metric.max(0).values
+			score = torch.exp(self.cfg.temperature * (elite_metric - max_metric))  # [num_elites, 1]
 			score = score / score.sum(0)
-			mean = (score.unsqueeze(0) * elite_actions).sum(dim=1) / (score.sum(0) + 1e-9)
+			mean = (score.unsqueeze(0) * elite_actions).sum(dim=1) / (score.sum(0) + 1e-9) #[1, num elite, 1] * [T,num elite,A] = weighted actinos by score [T, num elite, A] , sum dim 1 : [T,A] , divide by scaler , mean is T,A
 			std = ((score.unsqueeze(0) * (elite_actions - mean.unsqueeze(1)) ** 2).sum(dim=1) / (score.sum(0) + 1e-9)).sqrt()
-			std = std.clamp(self.cfg.min_std, self.cfg.max_std)
+			std = std.clamp(self.cfg.min_std, self.cfg.max_std) 							#[T,A]
 			if self.cfg.multitask:
 				mean = mean * self.model._action_masks[task]
 				std = std * self.model._action_masks[task]
 
 		# Select action
-		rand_idx = math.gumbel_softmax_sample(score.squeeze(1))
-		actions = torch.index_select(elite_actions, 1, rand_idx).squeeze(1)
-		pred_values = torch.index_select(elite_value, 0, rand_idx).squeeze(1)
-		reward_uncer = torch.index_select(elite_rew_uncer, 0, rand_idx).squeeze(1)
-		reward_num_uncer = torch.index_select(elite_num_rew_uncer, 0, rand_idx).squeeze(1)
-		aleatoric_uncer = torch.index_select(elite_aleatoric_uncer, 0, rand_idx).squeeze(1)
-		dyn_uncer = torch.index_select(elite_dyn_uncer, 0, rand_idx).squeeze(1)
-		adjusted_pred_reward = torch.index_select(elite_adjusted_reward, 0, rand_idx).squeeze(1)
-		pred_reward = torch.index_select(elite_pred_rewards, 0, rand_idx)
+		rand_idx = math.gumbel_softmax_sample(score.squeeze(1)) #scaler
+		actions = torch.index_select(elite_actions, 1, rand_idx).squeeze(1) #[T,A]
+		# Final info dict
+		info = {
+			"value":  elite_value[rand_idx].squeeze(0), #value of the random action chosen from the elite actions, scaler 
+			"reward": elite_info["reward"][rand_idx].squeeze(0), #reward of the random action chosen from the elite actions, scaler 
+			"reward_epistemic": elite_info["reward_epistemic"][rand_idx].squeeze(0), #reward epi uncertainty of the random action chosen from the elite actions, scaler
+			"reward_aleatoric":  elite_info["reward_aleatoric"][rand_idx].squeeze(0),#reward  aleatoric of the random action chosen from the elite actions, scaler
+			"dyn_epistemic": elite_info["dynamics_epistemic"][rand_idx].squeeze(0), #dyn epi uncertainty of the random action chosen from the elite actions, scaler
+			"dyn_aleatoric":  elite_info["dynamics_aleatoric"][rand_idx].squeeze(0), #dyn  aleatoric of the random action chosen from the elite actions, scaler
+			"ubp_reward":  elite_ubp_reward[rand_idx].squeeze(0)  #ubp reward of the random action chosen from the elite actions, scaler 
+		}
 		a, std= actions[0], std[0]
 		if not eval_mode:
 			a = a + std * torch.randn(self.cfg.action_dim, device=std.device)
 		self._prev_mean.copy_(mean)
-		return a.clamp(-1, 1), pred_values[0] , pred_reward[0], reward_uncer[0], dyn_uncer[0], adjusted_pred_reward[0], reward_num_uncer[0], aleatoric_uncer[0]
-
+		return a.clamp(-1, 1), info
+	
 	def update_pi(self, zs, task):
 		"""
 		Update policy using a sequence of latent states.
@@ -287,101 +401,75 @@ class TDMPC2(torch.nn.Module):
 		discount = self.discount[task].unsqueeze(-1) if self.cfg.multitask else self.discount
 		return reward + discount * (1-terminated) * self.model.Q(next_z, action, task, return_type='min', target=True)
 
+	def _compute_reward_loss(self, _zs, action, rewards, member ,task):
+		"""
+		_zs: [3, 256 , 512] latent observation for 3 time steps, 256 samples (from batch size) and 512 latent dimension
+		action: [3 , 256 , 4] actions for 3 time steps, 256 samples (from batch size) and 512 action dimenion  
+		rewards : [3 , 256 , 1] actual rewards for 3 timesteps for 256 samples (from batch size) and 1 scaler reward
 
-	def _compute_dynamics_loss(self, obs, action, next_z, task):
-		# Latent rollout
-		zs = torch.empty(self.cfg.horizon+1, self.cfg.batch_size, self.cfg.latent_dim, device=self.device)
-		z = self.model.encode(obs[0], task)
-		zs[0] = z
-
-		num_ensemble = self.cfg.num_d                # 5
-		batch_size = z.shape[0]                      # 256
-		split_sizes = [batch_size // num_ensemble] * num_ensemble
-		split_sizes[-1] += batch_size % num_ensemble  # Add remainder to last chunk
-
-		# Create data partition indices
-		indices = torch.arange(batch_size, device=z.device)
-		split_indices = torch.split(indices, split_sizes)
-		consistency_loss = 0.0
-		for member, idx in enumerate(split_indices):
-			for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
-				# Predict next latent state for all ensemble members, then select this member's
-				z_ens , _ , _ = self.model.next(z[idx], _action[idx], task)  # shape [ensemble_size, chunk_size, latent_dim]
-				z[idx] = z_ens[member]  # shape [chunk_size, latent_dim]
-
-				# Compute loss and update latent
-				consistency_loss = consistency_loss + F.mse_loss(z[idx], _next_z[idx]) * self.cfg.rho**t
-				zs[t + 1][idx] = z[idx]
-		return consistency_loss, zs  
-
-	@torch._dynamo.disable
-	def _compute_reward_loss(self, _zs, action, rewards , task):
+		returns reward loss for preferences using sigmoid loss 
+		"""
 		T, N, _ = _zs.shape
-		
+
 		# Discount vector
 		discount_factors = (self.cfg.rho ** torch.arange(T, device=self.cfg.cuda_device).float()).view(T, 1, 1)
 		# Discounted sum of true rewards: [N, 1]
-		discounted_true_rewards = torch.sum(rewards * discount_factors, dim=0).squeeze(-1)  # [N]
-
-		# Discounted sum of predicted rewards
-		discounted_pred_rewards = torch.zeros((self.cfg.num_r, N), device=self.cfg.cuda_device)  # [reward ensemble size, N]
-		for t in range(T):
-			discounted_pred_rewards =  discounted_pred_rewards + (self.model.reward(_zs[t] , action[t] , task)).squeeze(-1)  * self.cfg.rho**t
-
-		# Generate all unique unordered pairs
+		discounted_true_rewards = (rewards * discount_factors).sum(dim=0).view(N) #[N]
 		pair_indices = list(combinations(range(N), 2))  # [(i, j)]
-		random.shuffle(pair_indices)
-		pair_indices = torch.tensor(pair_indices, device=self.cfg.cuda_device)  # [num_pairs, 2]
-		num_pairs = pair_indices.shape[0]
-		chunk_size = num_pairs // self.cfg.num_r
-		ensemble_pairs = pair_indices.view(self.cfg.num_r, chunk_size, 2).view(-1, 2)  # [num_r * chunk_size, 2]
+		# Step 1: Convert to index tensors
+		pair_indices = torch.tensor(pair_indices, device=_zs.device)  # [M, 2]
+		i_idx = pair_indices[:, 0]  # [M]
+		j_idx = pair_indices[:, 1]  # [M]
 
-		# True label
-		r_ij_flat = discounted_true_rewards[ensemble_pairs]  # [num_r * chunk_size, 2]
-		true_label = torch.full((r_ij_flat.shape[0],), -1, dtype=torch.int64, device=self.cfg.cuda_device)
-		true_label[r_ij_flat[:, 0] > r_ij_flat[:, 1]] = 0
-		true_label[r_ij_flat[:, 0] < r_ij_flat[:, 1]] = 1
+		# Step 2: Get rewards for both sides
+		r_i = discounted_true_rewards[i_idx]  # [M]
+		r_j = discounted_true_rewards[j_idx]  # [M]
 
-		# Predicted label
-		ensemble_pairs = pair_indices.view(self.cfg.num_r, chunk_size, 2)  # [num_r, chunk_size, 2]
-		i_idx = ensemble_pairs[:, :, 0]  
-		j_idx = ensemble_pairs[:, :, 1]
-		pred_r_i = discounted_pred_rewards.gather(dim=1, index=i_idx)  # [num_r, chunk_size]
-		pred_r_j = discounted_pred_rewards.gather(dim=1, index=j_idx)  # [num_r, chunk_size]
-		logits = torch.stack([pred_r_i, pred_r_j], dim=-1).view(-1, 2)  # [num_r * chunk_size, 2]
+		# Step 3: Compare and filter
+		# Mask where rewards are not equal
+		not_equal = r_i != r_j  # [M]
+		greater = r_i > r_j     # [M]
 
-		reward_loss = nn.CrossEntropyLoss(ignore_index=-1)(logits, true_label)
-		return reward_loss
+		# Filter only non-equal pairs
+		i_idx = i_idx[not_equal]
+		j_idx = j_idx[not_equal]
+		greater = greater[not_equal]
 
-	def _compute_reward(self, z, actions, task):
-		pred_reward_ens = self.model.reward(z, actions, task).squeeze(-1)  # (5 x 512)
-		r_i = pred_reward_ens.unsqueeze(2)  # [M, N, 1]
-		r_j = pred_reward_ens.unsqueeze(1)  # [M, 1, N]
-
-		# Assign flipped labels as specified
-		preference = torch.where(
-			r_i > r_j, 0.0,
-			torch.where(r_i < r_j, 1.0, 0.5)
-		)  # shape: [M, N, N]
+		# Step 4: Assign chosen/rejected based on comparison
+		chosen_indices = torch.where(greater, i_idx, j_idx)     # [M']
+		rejected_indices = torch.where(greater, j_idx, i_idx)   # [M']
 		
-		# Compute std over ensemble members, ignoring NaNs
-		disagreement_std = torch.std(preference, dim=0 , unbiased=False)  # shape: [N, N]
-		
-		# Remove self-comparisons
-		disagreement_std.fill_diagonal_(0)
 
-		# Aggregate: mean disagreement for each sample across others
-		disagreement = disagreement_std.mean(dim=1)  # shape: [N]
-		# Just to to plot: to be removed
-		# Normalized Ensemble Standard Deviation
-		# normalize each model's predictions to zero mean and unit variance
-		model_mean = pred_reward_ens.mean(dim=1, keepdim=True)  # [M, 1]
-		model_std = pred_reward_ens.std(dim=1, keepdim=True) + 1e-8  # [M, 1]
-		pred_reward_normalized = (pred_reward_ens - model_mean) / model_std  # [M, N]
-		# Step 2: compute std across ensemble members 
-		normalized_std = pred_reward_normalized.std(dim=0, unbiased=False, keepdim=True).T  # [N, 1]
-		return pred_reward_ens.unsqueeze(-1) , disagreement.unsqueeze(-1) , normalized_std  # shape: [N,1]
-		
+		# Flatten from [T, N, ...] to [T*N, ...]
+		zs_flat = _zs.reshape(T * N, -1)            # [T*N, latent_dim]
+		action_flat = action.reshape(T * N, -1)     # [T*N, action_dim]
+
+		# Call model on flattened input
+		mu_flat, var_flat = self.model.reward_single_member(zs_flat, action_flat, index=member, task=task)  # [T*N]
+
+		# Reshape back to [T, N]
+		mu = mu_flat.view(T, N)
+		var = var_flat.view(T, N)
+
+		# Sum over time to get trajectory-level mean/var
+		total_means = (mu * discount_factors.view(T, 1)).sum(dim=0)        # [N]
+		total_vars = (var * (discount_factors.view(T, 1) ** 2)).sum(dim=0)     # [N]
+
+		# Get chosen vs rejected
+		var_c = total_vars[chosen_indices]     # [M]
+		var_r = total_vars[rejected_indices]   # [M]
+
+		mean_z = total_means[chosen_indices]  - total_means[rejected_indices]
+		var_z = torch.sqrt(var_c**2 + var_r**2 + 1e-8)
+
+		# MC loss estimation
+		num_sample = 1000
+		z_samples = torch.randn(num_sample, var_z.size(0), device=var_z.device, dtype=torch.float32)
+		z_samples = z_samples * var_z.unsqueeze(0) + mean_z.unsqueeze(0)
+		loss = -torch.nn.functional.logsigmoid(z_samples).mean()
+		return loss
+
+	
 	def _update(self, obs, action, reward, terminated, task=None):
 		# Compute targets
 		with torch.no_grad():
@@ -397,8 +485,7 @@ class TDMPC2(torch.nn.Module):
 		zs[0] = z
 		consistency_loss = 0
 		for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
-			ensemble_pred , _ , _= self.model.next(z, _action, task)  # shape [batch_size, latent_dim]
-			z = ensemble_pred.mean(dim=0) 
+			z , _ , _= self.model.next(z, _action, task)  # shape [batch_size, latent_dim]
 			consistency_loss = consistency_loss + F.mse_loss(z, _next_z) * self.cfg.rho**t
 			zs[t+1] = z
 
@@ -406,8 +493,9 @@ class TDMPC2(torch.nn.Module):
 		_zs = zs[:-1]
 		qs = self.model.Q(_zs, action, task, return_type='all')
 
-		reward_loss = self._compute_reward_loss(_zs, action, reward, task)
-
+		reward_loss = 0
+		for rm in range(self.cfg.num_r_d):
+			reward_loss = reward_loss + self._compute_reward_loss(_zs, action, reward, rm , task)
 		if self.cfg.episodic:
 			termination_pred = self.model.termination(zs[1:], task, unnormalized=True)
 
@@ -458,6 +546,104 @@ class TDMPC2(torch.nn.Module):
 		info.update(pi_info)
 		return info.detach().mean()
 
+	def _update_independant(self, obs, action, reward, terminated, task=None):
+		"""
+		# Updating the loss is not dependant on episetmic uncertainty, the variance of each single member is only used for its loss computation only
+		obs: A batch of [batch size], each element in the batch is four conseqtive observations (4 because T = 3 +1), each observation is obs dimension [T+1,B,39]
+		action: A batch of [batch size], each element in the batch is three conseqtive actions (because T = 3), each action is action dimension [T,B,4]
+		reward: A batch of [batch size], each element in the batch is three conseqtive rewards (because T = 3), each reward is scaler [T,B,1]
+		terminated: A batch of [batch size], each element in the batch is three conseqtive terminated status (because T = 3), each reward is scaler [T,B,1]
+		"""
+		consistency_loss_all, reward_loss_all, value_loss_all, termination_loss_all, total_loss_all, grad_norm_all = 0,0,0,0,0,0
+		for member in range(self.cfg.num_r_d):
+			#Compute Targets using the true rewards and true next states (encoded) to be passed to the Q model. 
+			# True input used : rewards, terminated status, next observed stated. 
+			# World Model prediction is used in encoded next states, Q value estimate given the encoded next states and predicted action from policy
+			# #TODO MN: Why were true actions not used even though they are available from the buffer
+			with torch.no_grad():
+				next_z = self.model.encode(obs[1:], task) # [T,B, D] the latent dimension of the next states of the current observation in the selected sequence [observation at T=2,3,4] ie target next states for the current state
+				td_targets = self._td_target(next_z, reward, terminated, task) #[T,B,1] target expected return starting from current state
+
+			# Prepare for update
+			self.model.train()
+
+			# Latent rollout
+			# zs is the Predicted states, except for the first observation in the sequence because it is the first one, can not be predicetd given something. [4 (T+1), Batch Size , Latent Dimension]
+			zs = torch.empty(self.cfg.horizon+1, self.cfg.batch_size, self.cfg.latent_dim, device=self.device)
+			# encode the first observation of each sequence [B, D]
+			z = self.model.encode(obs[0], task)
+			# fill the latent state of the non predictable first observation
+			zs[0] = z
+			consistency_loss = 0
+			for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
+				(mu, var) = self.model.next_single_member(z, _action, member, task)  # mu shape  is [batch_size, latent_dim] , var shape is [batch size,latent dim]
+				consistency_loss = consistency_loss + gaussian_nll_loss(mu, _next_z, var) * self.cfg.rho**t
+				zs[t+1] = mu #fill each predicted latent observation in zs
+
+			# Predictions
+			# zs are the Predicted states , since no action is associated with the last state, no reward , no terminated signal. It is not usable, hence exclude the last predicted state. 
+			_zs = zs[:-1] #[T,B , D]
+			qs = self.model.Q(_zs, action, task, return_type='all')
+
+			reward_loss = self._compute_reward_loss(_zs, action, reward, member ,task)
+
+			if self.cfg.episodic:
+				termination_pred = self.model.termination(zs[1:], task, unnormalized=True)
+
+			# Compute losses
+			value_loss = 0
+			for t, (td_targets_unbind, qs_unbind) in enumerate(zip(td_targets.unbind(0), qs.unbind(1))):
+				for _, qs_unbind_unbind in enumerate(qs_unbind.unbind(0)):
+					value_loss = value_loss + math.soft_ce(qs_unbind_unbind, td_targets_unbind, self.cfg).mean() * self.cfg.rho**t
+
+			consistency_loss = consistency_loss / self.cfg.horizon
+			reward_loss = reward_loss / self.cfg.horizon
+			if self.cfg.episodic:
+				termination_loss = F.binary_cross_entropy_with_logits(termination_pred, terminated)
+			else:
+				termination_loss = 0.
+			value_loss = value_loss / (self.cfg.horizon * self.cfg.num_q)
+			total_loss = (
+				self.cfg.consistency_coef * consistency_loss +
+				self.cfg.reward_coef * reward_loss +
+				self.cfg.termination_coef * termination_loss +
+				self.cfg.value_coef * value_loss
+			)
+
+			# Update model
+			total_loss.backward()
+			grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg.grad_clip_norm)
+			self.optim.step()
+			self.optim.zero_grad(set_to_none=True)
+
+			# Update policy
+			pi_info = self.update_pi(zs.detach(), task)
+
+			# Update target Q-functions
+			self.model.soft_update_target_Q()
+			consistency_loss_all =consistency_loss_all + consistency_loss 
+			reward_loss_all = reward_loss_all + reward_loss 
+			value_loss_all = value_loss_all + value_loss
+			termination_loss_all = termination_loss_all + termination_loss 
+			total_loss_all = total_loss_all + total_loss
+			grad_norm_all = grad_norm_all + grad_norm 
+
+		
+		# Return training statistics
+		self.model.eval()
+		info = TensorDict({
+			"consistency_loss": consistency_loss_all / self.cfg.num_r_d,
+			"reward_loss": reward_loss_all / self.cfg.num_r_d,
+			"value_loss": value_loss_all / self.cfg.num_r_d,
+			"termination_loss": termination_loss_all / self.cfg.num_r_d,
+			"total_loss": total_loss_all / self.cfg.num_r_d,
+			"grad_norm": grad_norm_all / self.cfg.num_r_d,
+		})
+		if self.cfg.episodic:
+			info.update(math.termination_statistics(torch.sigmoid(termination_pred[-1]), terminated[-1]))
+		info.update(pi_info)
+		return info.detach().mean()
+
 	def update(self, buffer, step):
 		"""
 		Main update function. Corresponds to one iteration of model learning.
@@ -474,4 +660,7 @@ class TDMPC2(torch.nn.Module):
 			kwargs["task"] = task
 		torch.compiler.cudagraph_mark_step_begin()
 		self.training_step = step
-		return self._update(obs, action, reward, terminated, **kwargs)
+		if self.cfg.independant_updates:
+			return self._update_independant(obs, action, reward, terminated, **kwargs)
+		else:
+			return self._update(obs, action, reward, terminated, **kwargs)

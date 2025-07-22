@@ -23,10 +23,11 @@ class WorldModel(nn.Module):
 			for i in range(len(cfg.tasks)):
 				self._action_masks[i, :cfg.action_dims[i]] = 1.
 		self._encoder = layers.enc(cfg)
-		#self._dynamics = layers.Ensemble([layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], cfg.latent_dim, act=layers.SimNorm(cfg)) for _ in range(cfg.num_d)])
-		self._dynamics = EnsembleStochasticLinear(cfg.latent_dim + cfg.action_dim + cfg.task_dim, cfg.mlp_dim, cfg.latent_dim, ensemble_size=cfg.num_d)
-		# self._reward = layers.Ensemble([layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1)) for _ in range(cfg.num_r)]) # this is the old reward model, replaced with pref model 
-		self._reward =layers.Ensemble([layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 3*[cfg.mlp_reward_dim], 1 , hidden_act=nn.LeakyReLU() , act=nn.Hardtanh(0.0, 1000.0) , Normed=False) for _ in range(cfg.num_r)])
+		#self._dynamics = layers.Ensemble([layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], cfg.latent_dim, act=layers.SimNorm(cfg)) for _ in range(cfg.num_r_d)])
+		# self._reward = layers.Ensemble([layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1)) for _ in range(cfg.num_r_d)]) # this is the old reward model, replaced with pref model 
+		#self._reward =layers.Ensemble([layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 3*[cfg.mlp_reward_dim], 1 , hidden_act=nn.LeakyReLU() , act=nn.Hardtanh(0.0, 1000.0) , Normed=False) for _ in range(cfg.num_r_d)])
+		self._dynamics = EnsembleStochasticLinear(cfg.latent_dim + cfg.action_dim + cfg.task_dim, cfg.mlp_dim, cfg.latent_dim, ensemble_size=cfg.num_r_d) 
+		self._reward = EnsembleStochasticLinear(cfg.latent_dim + cfg.action_dim + cfg.task_dim, cfg.mlp_dim, 1, ensemble_size=cfg.num_r_d , activation='leaky_relu')
 		self._termination = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 1) if cfg.episodic else None
 		self._pi = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 2*cfg.action_dim)
 		self._Qs = layers.Ensemble([layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1), dropout=cfg.dropout) for _ in range(cfg.num_q)])
@@ -120,10 +121,22 @@ class WorldModel(nn.Module):
 		if self.cfg.multitask:
 			z = self.task_emb(z, task)
 		z = torch.cat([z, a], dim=-1) #( 24 x 516) batch size x latent_dim + action_dim
-		pred , _ , disagreement , aleatoric = self._dynamics(z)  # mu: (5 x 24 x 512) num_ensemble x batch size x latent_dim , log_std: (5 x 24 x 512) ,  disagreement: (24 x 516) batch size x 1	 (probabilistic output)
-		#pred = self._dynamics(z)                    # ensemeble_output: (5 x 24 x 512) num_ensemble x batch size x latent_dim (deterministic output)
-		return pred , disagreement , aleatoric 
+		next_ens_pred , epistemic , aleatoric = self._dynamics(z)  # mu: (5 x 24 x 512) num_ensemble x batch size x latent_dim , log_std: (5 x 24 x 512) ,  disagreement: (24 x 516) batch size x 1	 (probabilistic output)
+		next_pred = next_ens_pred.mean(dim=0) 
+		return next_pred , epistemic , aleatoric 
 
+	def next_single_member(self, z, a, index, task):
+		"""
+		Predicts the next latent state given the current latent state and action using a single model in the ensemble
+		Only used during independant training of ensemeble members 
+		returns mean and variance of a single member (not ensemble)
+		"""
+		if self.cfg.multitask:
+			z = self.task_emb(z, task)
+		z = torch.cat([z, a], dim=-1) #( 24 x 516) batch size x latent_dim + action_dim
+		ensemble_output  = self._dynamics.single_forward(z , index)  # mu: (5 x 24 x 512) num_ensemble x batch size x latent_dim , log_std: (5 x 24 x 512) 
+		return ensemble_output
+	
 	def reward(self, z, a, task):
 		"""
 		Predicts instantaneous (single-step) reward.
@@ -131,7 +144,21 @@ class WorldModel(nn.Module):
 		if self.cfg.multitask:
 			z = self.task_emb(z, task)
 		z = torch.cat([z, a], dim=-1)
-		return self._reward(z)
+		reward_ens_pred , epistemic , aleatoric = self._reward(z)
+		reward_pred = reward_ens_pred.mean(dim=0)
+		return reward_pred , epistemic , aleatoric
+	
+	def reward_single_member(self, z, a, index, task):
+		"""
+		Predicts instantaneous (single-step) reward using a single model in the ensemble.
+		Only used during independant training of ensemeble members 
+		returns mean and variance of a single member (not ensemble)
+		"""
+		if self.cfg.multitask:
+			z = self.task_emb(z, task)
+		z = torch.cat([z, a], dim=-1)
+		ensemble_output = self._reward.single_forward(z , index)
+		return ensemble_output 
 	
 	def termination(self, z, task, unnormalized=False):
 		"""

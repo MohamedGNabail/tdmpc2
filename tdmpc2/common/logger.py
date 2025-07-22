@@ -139,7 +139,7 @@ class Logger:
 				],
 			dir=self._log_dir,
 			config=dataclasses.asdict(cfg),
-			mode="offline"
+			mode="online"
 		)
 		print(colored("Logs will be synced with wandb.", "blue", attrs=["bold"]))
 		self._wandb = wandb

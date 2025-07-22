@@ -34,5 +34,5 @@ apptainer exec --nv \
     export MUJOCO_GL=disable
     export WANDB_MODE=offline
     export WANDB_DIR=/mnt/wandb_logs
-    python3 '$SCRIPT_PATH' +rdyn_uncer_beta_coef_value=$beta
+    python3 '$SCRIPT_PATH' +dyn_uncer_beta_coef_value=$beta
   "
