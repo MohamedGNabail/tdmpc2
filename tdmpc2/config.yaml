@@ -9,7 +9,7 @@ episodic: false
 # evaluation
 checkpoint: ???
 eval_episodes: 10
-eval_freq: 1000
+eval_freq: 5000
 
 # training
 steps: 1000000
@@ -27,7 +27,7 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: seed_2
+exp_name: RND_ACT
 data_dir: ???
 
 # planning
@@ -51,22 +51,6 @@ num_bins: 101
 vmin: -10
 vmax: +10
 
-# prefernce based reward
-pref_segment: 50
-pref_activation: relu
-pref_reward_lr: 0.001
-pref_reward_batch: 128
-pref_large_batch: 10
-pref_label_margin: 0.0
-pref_teacher_beta: -1
-pref_teacher_gamma: 1
-pref_teacher_eps_mistake: 0
-pref_teacher_eps_skip: 0
-pref_teacher_eps_equal: 0
-pref_capacity: 5e5
-pref_feed_type: 0
-pref_reward_update: 200
-
 # architecture
 model_size: 5
 num_enc_layers: 2
@@ -77,13 +61,12 @@ mlp_reward_dim: 255
 latent_dim: 512
 task_dim: 96
 num_q: 5
-num_r: 10
-num_d: 5
+num_r_d: 5
 dropout: 0.01
 simnorm_dim: 8
 
 # logging
-wandb_project: TDMPC2
+wandb_project: UBP2
 wandb_entity: mohamednabail_leaf
 wandb_silent: false
 enable_wandb: true
@@ -93,7 +76,7 @@ save_csv: true
 compile: false
 save_video: false
 save_agent: true
-seed: 2
+seed: 0
 
 # convenience
 work_dir: ???
@@ -114,5 +97,7 @@ cuda_device: cuda:0
 
 #planning w uncertainty
 rew_uncer_alpha_coef: 0
-dyn_uncer_beta_coef: ???
+dyn_uncer_beta_coef: 0
 evaluate_w_uncer: false
+independant_updates: true
+planning_criteria: ubp_reward
