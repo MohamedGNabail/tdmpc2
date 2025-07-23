@@ -6,7 +6,7 @@ import torch.nn as nn
 from common import layers, math, init
 from tensordict import TensorDict
 from tensordict.nn import TensorDictParams
-from common.layers import EnsembleStochasticLinear
+from common.layers import EnsembleStochasticLinear , EnsembleStochasticLinearUnitVariance
 
 class WorldModel(nn.Module):
 	"""
@@ -26,7 +26,7 @@ class WorldModel(nn.Module):
 		#self._dynamics = layers.Ensemble([layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], cfg.latent_dim, act=layers.SimNorm(cfg)) for _ in range(cfg.num_r_d)])
 		# self._reward = layers.Ensemble([layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1)) for _ in range(cfg.num_r_d)]) # this is the old reward model, replaced with pref model 
 		#self._reward =layers.Ensemble([layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 3*[cfg.mlp_reward_dim], 1 , hidden_act=nn.LeakyReLU() , act=nn.Hardtanh(0.0, 1000.0) , Normed=False) for _ in range(cfg.num_r_d)])
-		self._dynamics = EnsembleStochasticLinear(cfg.latent_dim + cfg.action_dim + cfg.task_dim, cfg.mlp_dim, cfg.latent_dim, ensemble_size=cfg.num_r_d, uncertainity=self.cfg.uncertainity_rep) 
+		self._dynamics = EnsembleStochasticLinearUnitVariance(cfg.latent_dim + cfg.action_dim + cfg.task_dim, cfg.mlp_dim, cfg.latent_dim, ensemble_size=cfg.num_r_d) 
 		self._reward = EnsembleStochasticLinear(cfg.latent_dim + cfg.action_dim + cfg.task_dim, cfg.mlp_dim, 1, ensemble_size=cfg.num_r_d , activation='leaky_relu' , uncertainity=self.cfg.uncertainity_rep) # this is the new reward model, replaced with pref model
 		self._termination = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 1) if cfg.episodic else None
 		self._pi = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 2*cfg.action_dim)
@@ -121,9 +121,9 @@ class WorldModel(nn.Module):
 		if self.cfg.multitask:
 			z = self.task_emb(z, task)
 		z = torch.cat([z, a], dim=-1) #( 24 x 516) batch size x latent_dim + action_dim
-		next_ens_pred , epistemic , aleatoric = self._dynamics(z)  # mu: (5 x 24 x 512) num_ensemble x batch size x latent_dim , log_std: (5 x 24 x 512) ,  disagreement: (24 x 516) batch size x 1	 (probabilistic output)
+		next_ens_pred , epistemic = self._dynamics(z)  # mu: (5 x 24 x 512) num_ensemble x batch size x latent_dim ,  disagreement: (24 x 516) batch size x 1
 		next_pred = next_ens_pred.mean(dim=0) 
-		return next_pred , epistemic , aleatoric 
+		return next_pred , epistemic 
 
 	def next_single_member(self, z, a, index, task):
 		"""
@@ -134,7 +134,7 @@ class WorldModel(nn.Module):
 		if self.cfg.multitask:
 			z = self.task_emb(z, task)
 		z = torch.cat([z, a], dim=-1) #( 24 x 516) batch size x latent_dim + action_dim
-		ensemble_output  = self._dynamics.single_forward(z , index)  # mu: (5 x 24 x 512) num_ensemble x batch size x latent_dim , log_std: (5 x 24 x 512) 
+		ensemble_output  = self._dynamics.single_forward(z , index)  # mu: (5 x 24 x 512) num_ensemble x batch size x latent_dim 
 		return ensemble_output
 	
 	def reward(self, z, a, task):

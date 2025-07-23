@@ -97,8 +97,8 @@ cuda_device: cuda:0
 
 #planning w uncertainty
 rew_uncer_alpha_coef: 0
-dyn_uncer_beta_coef: 2
+dyn_uncer_beta_coef: 0
 evaluate_w_uncer: false
 independant_updates: true
-planning_criteria: ubp_reward
-uncertainity_rep: BC
+planning_criteria: total_value
+uncertainity_rep: JRD

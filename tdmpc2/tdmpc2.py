@@ -128,7 +128,7 @@ class TDMPC2(torch.nn.Module):
 		reward, reward_epi_uncer, reward_aleatoric_uncer = self.model.reward(z, action, task)
 
 		# Transition prediction
-		z, dyn_epi_uncer, dyn_aleatoric_uncer = self.model.next(z, action, task)
+		z, dyn_epi_uncer = self.model.next(z, action, task)
 
 		# Uncertainty weighting (disabled during eval)
 		dyn_beta = 0 if eval_mode else self.cfg.dyn_uncer_beta_coef
@@ -143,7 +143,6 @@ class TDMPC2(torch.nn.Module):
 			"reward_epistemic": reward_epi_uncer.squeeze(0), # scalar
 			"reward_aleatoric": reward_aleatoric_uncer.squeeze(0), # scalar
 			"dyn_epistemic": dyn_epi_uncer.squeeze(0),       # scalar
-			"dyn_aleatoric": dyn_aleatoric_uncer.squeeze(0), # scalar
 			"ubp_reward": adjusted_reward.squeeze(0),   # scalar
 		}
 		#TODO: Nitpicking value is not calculated for rand action, and since ubp does not use value, it is not needed now but it would be a nice plot to have 
@@ -192,7 +191,6 @@ class TDMPC2(torch.nn.Module):
 		epi_rew    = torch.zeros_like(z[:, :1])
 		alea_rew   = torch.zeros_like(z[:, :1])
 		epi_dyn    = torch.zeros_like(z[:, :1])
-		alea_dyn   = torch.zeros_like(z[:, :1])
 
 		for t in range(self.cfg.horizon):
 			# reward_ens = math.two_hot_inv(reward_ens, self.cfg) removed because the preference model is deterministic
@@ -201,7 +199,7 @@ class TDMPC2(torch.nn.Module):
 			
 			# Dynamics prediction
 			# Next State prediction: reward =  [N , D] , reward_epi_uncer = [N , 1] , reward_aleatoric_uncer = [N, 1]
-			z, dyn_epi_uncer, dyn_aleatoric_uncer = self.model.next(z, actions[t], task)
+			z, dyn_epi_uncer = self.model.next(z, actions[t], task)
 
 			dyn_beta = 0 if eval_mode else self.cfg.dyn_uncer_beta_coef
 			rew_alpha = 0 if eval_mode else self.cfg.rew_uncer_alpha_coef
@@ -224,7 +222,6 @@ class TDMPC2(torch.nn.Module):
 			epi_rew += reward_epi_uncer
 			alea_rew += reward_aleatoric_uncer
 			epi_dyn += dyn_epi_uncer
-			alea_dyn += dyn_aleatoric_uncer
 
 		# Bootstrap value from final state
 		action, _ = self.model.pi(z, task)
@@ -235,7 +232,6 @@ class TDMPC2(torch.nn.Module):
 			"reward_epistemic": epi_rew,
 			"reward_aleatoric": alea_rew,
 			"dynamics_epistemic": epi_dyn,
-			"dynamics_aleatoric": alea_dyn
 		}
 		value = value.nan_to_num(0)
 		ubp_reward = ubp_reward.nan_to_num(0)
@@ -267,7 +263,7 @@ class TDMPC2(torch.nn.Module):
 			# Actions sampled from policy [T,self.cfg.num_pi_trajs,A]
 			for t in range(self.cfg.horizon-1):
 				pi_actions[t], _ = self.model.pi(_z, task)
-				_z , _ , _ = self.model.next(_z, pi_actions[t], task)
+				_z , _ = self.model.next(_z, pi_actions[t], task)
 			pi_actions[-1], _ = self.model.pi(_z, task)
 
 		# Initialize state and parameters
@@ -341,7 +337,6 @@ class TDMPC2(torch.nn.Module):
 			"reward_epistemic": elite_info["reward_epistemic"][rand_idx].squeeze(0), #reward epi uncertainty of the random action chosen from the elite actions, scaler
 			"reward_aleatoric":  elite_info["reward_aleatoric"][rand_idx].squeeze(0),#reward  aleatoric of the random action chosen from the elite actions, scaler
 			"dyn_epistemic": elite_info["dynamics_epistemic"][rand_idx].squeeze(0), #dyn epi uncertainty of the random action chosen from the elite actions, scaler
-			"dyn_aleatoric":  elite_info["dynamics_aleatoric"][rand_idx].squeeze(0), #dyn  aleatoric of the random action chosen from the elite actions, scaler
 			"ubp_reward":  elite_ubp_reward[rand_idx].squeeze(0)  #ubp reward of the random action chosen from the elite actions, scaler 
 		}
 		a, std= actions[0], std[0]
@@ -485,7 +480,7 @@ class TDMPC2(torch.nn.Module):
 		zs[0] = z
 		consistency_loss = 0
 		for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
-			z , _ , _= self.model.next(z, _action, task)  # shape [batch_size, latent_dim]
+			z , _ = self.model.next(z, _action, task)  # shape [batch_size, latent_dim]
 			consistency_loss = consistency_loss + F.mse_loss(z, _next_z) * self.cfg.rho**t
 			zs[t+1] = z
 
@@ -576,9 +571,9 @@ class TDMPC2(torch.nn.Module):
 			zs[0] = z
 			consistency_loss = 0
 			for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
-				(mu, var) = self.model.next_single_member(z, _action, member, task)  # mu shape  is [batch_size, latent_dim] , var shape is [batch size,latent dim]
-				consistency_loss = consistency_loss + gaussian_nll_loss(mu, _next_z, var) * self.cfg.rho**t
-				zs[t+1] = mu #fill each predicted latent observation in zs
+				z = self.model.next_single_member(z, _action, member, task)  # mu shape  is [batch_size, latent_dim] , var shape is [batch size,latent dim]
+				consistency_loss = consistency_loss + F.mse_loss(z, _next_z) * self.cfg.rho**t
+				zs[t+1] = z #fill each predicted latent observation in zs
 
 			# Predictions
 			# zs are the Predicted states , since no action is associated with the last state, no reward , no terminated signal. It is not usable, hence exclude the last predicted state. 

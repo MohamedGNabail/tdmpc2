@@ -126,7 +126,6 @@ class OnlineTrainer(Trainer):
 				reward_epistemic=action_info["reward_epistemic"],
 				reward_aleatoric=action_info["reward_aleatoric"],
 				dyn_epistemic=action_info["dyn_epistemic"],
-				dyn_aleatoric=action_info["dyn_aleatoric"],
 				ubp_reward=action_info["ubp_reward"],
 				true_reward = reward
 			)
