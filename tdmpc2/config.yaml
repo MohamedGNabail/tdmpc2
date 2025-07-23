@@ -27,7 +27,7 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: BCN_UBP
+exp_name: UBP
 data_dir: ???
 
 # planning
