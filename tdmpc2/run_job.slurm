@@ -3,7 +3,7 @@
 #SBATCH --output=logs/tdmpc2_%A_%a.out
 #SBATCH --error=logs/tdmpc2_%A_%a.err
 #SBATCH --array=0-24     # 25 jobs for 5x5 alpha/beta combos
-#SBATCH --time=48:00:00:00
+#SBATCH --time=48:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=8G
 #SBATCH --gres=gpu:1
