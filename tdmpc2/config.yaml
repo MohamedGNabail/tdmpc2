@@ -96,8 +96,8 @@ bin_size: ???
 cuda_device: cuda:0
 
 #planning w uncertainty
-rew_uncer_alpha_coef: 0
-dyn_uncer_beta_coef: 0
+rew_uncer_alpha_coef: 10
+dyn_uncer_beta_coef: 10
 evaluate_w_uncer: false
 independant_updates: true
 planning_criteria: total_value
