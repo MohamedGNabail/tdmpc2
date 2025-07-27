@@ -205,6 +205,10 @@ class TDMPC2(torch.nn.Module):
 			rew_alpha = 0 if eval_mode else self.cfg.rew_uncer_alpha_coef
 
 			# Adjusted reward (reward bonus shaping)
+			# Get mean magnitude of reward predictions for computing penalty, reward should not be negative in metaworld tasks but it is safer not to confuse the results by negating the signal of the alpha coefficient
+			adjusted_reward = reward + (rew_alpha * reward.abs() * reward_epi_uncer) + (dyn_beta * reward.abs() * dyn_epi_uncer)
+
+
 			adjusted_reward = reward + (rew_alpha * reward_epi_uncer) + (dyn_beta * dyn_epi_uncer)
 			G = G + discount * (1 - termination) * adjusted_reward
 

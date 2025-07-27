@@ -12,7 +12,7 @@
 module load apptainer
 
 # Sweep values for alpha and beta
-values=(-4 -2 0 2 4)
+values=(-0.01 -0.1 0 0.01 0.1)
 
 # Map SLURM array index to (alpha_index, beta_index)
 alpha_index=$((SLURM_ARRAY_TASK_ID / 5))

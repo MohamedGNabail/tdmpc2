@@ -76,8 +76,8 @@ class OnlineTrainer(Trainer):
 	def train(self):
 		"""Train a TD-MPC2 agent."""
 		train_metrics, done, eval_next = {}, True, False
-		self._obs_pointcloud = np.zeros((self.cfg.steps, 6), dtype=np.float32)
-		voxel_grid = VoxelGrid(self.env.observation_space.low[:3], self.env.observation_space.high[:3], voxel_size=0.01)
+		# self._obs_pointcloud = np.zeros((self.cfg.steps, 6), dtype=np.float32)
+		# voxel_grid = VoxelGrid(self.env.observation_space.low[:3], self.env.observation_space.high[:3], voxel_size=0.01)
 		self._obs_index = 0
 		while self._step <= self.cfg.steps:
 			# Evaluate agent periodically
@@ -116,8 +116,8 @@ class OnlineTrainer(Trainer):
 			action = action.cpu()
 			obs, reward, done, info = self.env.step(action)
 			# Store in point cloud
-			self._obs_pointcloud[self._obs_index, :3] = obs[:3].numpy()
-			self._obs_pointcloud[self._obs_index, 3:] = [0, 255, 0]
+			# self._obs_pointcloud[self._obs_index, :3] = obs[:3].numpy()
+			# self._obs_pointcloud[self._obs_index, 3:] = [0, 255, 0]
 			self._obs_index += 1
 			train_metrics.update(
 				step=self._step,
@@ -129,15 +129,15 @@ class OnlineTrainer(Trainer):
 				ubp_reward=action_info["ubp_reward"],
 				true_reward = reward
 			)
-			if self.cfg.enable_wandb and self._step % 100000 == 0:
-				voxel_grid.update(self._obs_pointcloud)
-				entropy, coverage = voxel_grid.compute_entropy()
-				obs_valid = self._obs_pointcloud[:self._obs_index]
-				train_metrics.update(
-							step =self._step,
-							entropy=entropy,
-							coverage=coverage,
-							gripper_pointcloud=self.logger._wandb.Object3D(obs_valid))
+			# if self.cfg.enable_wandb and self._step % 100000 == 0:
+				#voxel_grid.update(self._obs_pointcloud)
+				#entropy, coverage = voxel_grid.compute_entropy()
+				#obs_valid = self._obs_pointcloud[:self._obs_index]
+				# train_metrics.update(
+							# step =self._step,
+							#entropy=entropy,
+							#coverage=coverage,
+							# gripper_pointcloud=self.logger._wandb.Object3D(obs_valid))
 			self.logger.log(train_metrics, 'train')
 			
 			self._tds.append(self.to_td(obs, action, reward, info['terminated']))

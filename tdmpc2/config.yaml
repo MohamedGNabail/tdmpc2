@@ -2,7 +2,7 @@ defaults:
     - override hydra/launcher: submitit_local
 
 # environment
-task: mw-coffee-push
+task: mw-basketball
 obs: state
 episodic: false
 
@@ -82,7 +82,7 @@ seed: 0
 work_dir: ???
 task_title: ???
 multitask: false
-tasks: coffee-push
+tasks: basketball
 obs_shape: 39
 action_dim: 4
 episode_length: 200
