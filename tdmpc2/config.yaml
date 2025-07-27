@@ -66,7 +66,7 @@ dropout: 0.01
 simnorm_dim: 8
 
 # logging
-wandb_project: UBP2
+wandb_project: UBP_Scaled
 wandb_entity: mohamednabail_leaf
 wandb_silent: false
 enable_wandb: true
