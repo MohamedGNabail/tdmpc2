@@ -4,7 +4,6 @@ import numpy as np
 import torch
 from tensordict.tensordict import TensorDict
 from trainer.base import Trainer
-from common.voxel import VoxelGrid
 
 
 class OnlineTrainer(Trainer):
@@ -35,8 +34,7 @@ class OnlineTrainer(Trainer):
 				self.logger.video.init(self.env, enabled=(i==0))
 			while not done:
 				torch.compiler.cudagraph_mark_step_begin()
-				action, action_info = self.agent.act(obs, t0=t==0, eval_mode=True)
-				action = action.cpu()
+				action = self.agent.act(obs, t0=t==0, eval_mode=True)
 				obs, reward, done, info = self.env.step(action)
 				ep_reward += reward
 				t += 1
@@ -76,9 +74,6 @@ class OnlineTrainer(Trainer):
 	def train(self):
 		"""Train a TD-MPC2 agent."""
 		train_metrics, done, eval_next = {}, True, False
-		# self._obs_pointcloud = np.zeros((self.cfg.steps, 6), dtype=np.float32)
-		# voxel_grid = VoxelGrid(self.env.observation_space.low[:3], self.env.observation_space.high[:3], voxel_size=0.01)
-		self._obs_index = 0
 		while self._step <= self.cfg.steps:
 			# Evaluate agent periodically
 			if self._step % self.cfg.eval_freq == 0:
@@ -110,36 +105,12 @@ class OnlineTrainer(Trainer):
 
 			# Collect experience
 			if self._step > self.cfg.seed_steps:
-				action, action_info = self.agent.act(obs, t0=len(self._tds)==1)
+				action = self.agent.act(obs, t0=len(self._tds)==1)
 			else:
-				action , action_info = self.agent.rand_act(obs, self.env)
-			action = action.cpu()
+				action = self.env.rand_act()
 			obs, reward, done, info = self.env.step(action)
-			# Store in point cloud
-			# self._obs_pointcloud[self._obs_index, :3] = obs[:3].numpy()
-			# self._obs_pointcloud[self._obs_index, 3:] = [0, 255, 0]
-			self._obs_index += 1
-			train_metrics.update(
-				step=self._step,
-				value=action_info["value"],
-				pred_reward=action_info["reward"],
-				reward_epistemic=action_info["reward_epistemic"],
-				reward_aleatoric=action_info["reward_aleatoric"],
-				dyn_epistemic=action_info["dyn_epistemic"],
-				ubp_reward=action_info["ubp_reward"],
-				true_reward = reward
-			)
-			# if self.cfg.enable_wandb and self._step % 100000 == 0:
-				#voxel_grid.update(self._obs_pointcloud)
-				#entropy, coverage = voxel_grid.compute_entropy()
-				#obs_valid = self._obs_pointcloud[:self._obs_index]
-				# train_metrics.update(
-							# step =self._step,
-							#entropy=entropy,
-							#coverage=coverage,
-							# gripper_pointcloud=self.logger._wandb.Object3D(obs_valid))
-			self.logger.log(train_metrics, 'train')
-			
+			if self._step % 1010 == 0:
+				print(f'Step {self._step}, action: {action}, reward: {reward}, obs: {obs}, done: {done}, info: {info}')
 			self._tds.append(self.to_td(obs, action, reward, info['terminated']))
 
 			# Update agent
@@ -149,8 +120,8 @@ class OnlineTrainer(Trainer):
 					print('Pretraining agent on seed data...')
 				else:
 					num_updates = 1
-				for update_i in range(num_updates):
-					_train_metrics = self.agent.update(self.buffer, self._step)
+				for _ in range(num_updates):
+					_train_metrics = self.agent.update(self.buffer)
 				train_metrics.update(_train_metrics)
 
 			self._step += 1

@@ -108,4 +108,5 @@ def make_env(cfg):
 	if cfg.obs == 'rgb':
 		env = Pixels(env, cfg)
 	env = Timeout(env, max_episode_steps=500)
+	env.action_space.seed(cfg.seed)
 	return env
