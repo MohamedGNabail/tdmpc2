@@ -109,8 +109,6 @@ class OnlineTrainer(Trainer):
 			else:
 				action = self.env.rand_act()
 			obs, reward, done, info = self.env.step(action)
-			if self._step % 1010 == 0:
-				print(f'Step {self._step}, action: {action}, reward: {reward}, obs: {obs}, done: {done}, info: {info}')
 			self._tds.append(self.to_td(obs, action, reward, info['terminated']))
 
 			# Update agent

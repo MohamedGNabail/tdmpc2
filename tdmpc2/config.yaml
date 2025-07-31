@@ -76,7 +76,10 @@ save_csv: true
 compile: false
 save_video: true
 save_agent: true
-seed: 54321
+seed: 12345
+#device 
+cuda_device: cuda:0
+
 
 # convenience
 work_dir: ???
@@ -92,13 +95,13 @@ episode_lengths: ???
 seed_steps: ???
 bin_size: ???
 
-#device 
-cuda_device: cuda:1
+
 
 #planning w uncertainty
 rew_uncer_alpha_coef: 0.01
 dyn_uncer_beta_coef: 0.01
-q_uncertainty_coef: 0.01
+q_uncertainty_coef: 1
+plan_mean_std: false
 evaluate_w_uncer: false
 independant_updates: true
 planning_criteria: total_value

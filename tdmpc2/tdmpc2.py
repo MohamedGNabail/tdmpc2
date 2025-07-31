@@ -127,8 +127,10 @@ class TDMPC2(torch.nn.Module):
 		if eval_mode == False:
 			return 0
 		qs = math.two_hot_inv(self.model.Q(z, action, task, return_type='all'), self.cfg)
-		return qs.mean() * qs.std(0) * self.cfg.q_uncertainty_coef
-
+		if self.cfg.plan_mean_std: 
+			return qs.mean() * qs.std(0) * self.cfg.q_uncertainty_coef
+		else:
+			return qs.std(0) * self.cfg.q_uncertainty_coef
 
 	@torch.no_grad()
 	def _estimate_value(self, z, actions, task, eval_mode=False):
@@ -138,7 +140,7 @@ class TDMPC2(torch.nn.Module):
 		for t in range(self.cfg.horizon):
 			reward = math.two_hot_inv(self.model.reward(z, actions[t], task), self.cfg)
 			z = self.model.next(z, actions[t], task)
-			G = G + discount * (1-termination) * (reward - self._estimate_uncertainty(z, task , eval_mode))
+			G = G + discount * (1-termination) * (reward - self._estimate_uncertainty(z, actions[t], task , eval_mode))
 			discount_update = self.discount[torch.tensor(task)] if self.cfg.multitask else self.discount
 			discount = discount * discount_update
 			if self.cfg.episodic:
