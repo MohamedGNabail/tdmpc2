@@ -132,6 +132,30 @@ class TDMPC2(torch.nn.Module):
 		else:
 			return qs.std(0) * self.cfg.q_uncertainty_coef
 
+
+	@torch.no_grad()
+	def _estimate_r_uncertainty(self, z, action ,task , eval_mode=False):
+		"""Estimates epistemic uncertainty, normalized by predicted value."""
+		if eval_mode == False:
+			return 0
+		rs = math.two_hot_inv(self.model.reward(z, action, task, return_type='all'), self.cfg)
+		if self.cfg.plan_mean_std: 
+			return rs.mean(0) * rs.std(0) * self.cfg.rew_uncer_alpha_coef
+		else:
+			return rs.std(0) * self.cfg.rew_uncer_alpha_coef
+
+	@torch.no_grad()
+	def _estimate_d_uncertainty(self, z, action ,task , eval_mode=False):
+		"""Estimates epistemic uncertainty, normalized by predicted value."""
+		if eval_mode == False:
+			return 0
+		rs = math.two_hot_inv(self.model.reward(z, action, task, return_type='all'), self.cfg)
+		if self.cfg.plan_mean_std: 
+			return rs.mean() * rs.std(0) * self.cfg.rew_uncer_alpha_coef
+		else:
+			return rs.std(0) * self.cfg.rew_uncer_alpha_coef
+
+
 	@torch.no_grad()
 	def _estimate_value(self, z, actions, task, eval_mode=False):
 		"""Estimate value of a trajectory starting at latent state z and executing given actions."""
@@ -140,14 +164,19 @@ class TDMPC2(torch.nn.Module):
 		for t in range(self.cfg.horizon):
 			reward = math.two_hot_inv(self.model.reward(z, actions[t], task), self.cfg)
 			z = self.model.next(z, actions[t], task)
-			G = G + discount * (1-termination) * (reward - self._estimate_uncertainty(z, actions[t], task , eval_mode))
+			if self.cfg.uncertainty_type == 'q':
+				G = G + discount * (1-termination) * (reward - self._estimate_uncertainty(z, actions[t], task , eval_mode))
+			elif self.cfg.uncertainty_type == 'r':
+				G = G + discount * (1-termination) * (reward - self._estimate_r_uncertainty(z, actions[t], task , eval_mode))
+			elif self.cfg.uncertainty_type == 'd':
+				G = G + discount * (1-termination) * (reward - self._estimate_d_uncertainty(z, actions[t], task , eval_mode))
+
 			discount_update = self.discount[torch.tensor(task)] if self.cfg.multitask else self.discount
 			discount = discount * discount_update
 			if self.cfg.episodic:
 				termination = torch.clip(termination + (self.model.termination(z, task) > 0.5).float(), max=1.)
 		action, _ = self.model.pi(z, task)
-		return G + discount * (1-termination) * (self.model.Q(z, action, task, return_type='avg') - self._estimate_uncertainty(z, action, task , eval_mode))
-
+		return G + discount * (1-termination) * (self.model.Q(z, action, task, return_type='avg'))
 
 	@torch.no_grad()
 	def _plan(self, obs, t0=False, eval_mode=False, task=None):

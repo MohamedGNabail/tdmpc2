@@ -2,7 +2,7 @@ defaults:
     - override hydra/launcher: submitit_local
 
 # environment
-task: walker-walk
+task: mw-basketball
 obs: state
 episodic: false
 
@@ -27,7 +27,7 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: UBP
+exp_name: UBP_test_debug_now
 data_dir: ???
 
 # planning
@@ -76,16 +76,16 @@ save_csv: true
 compile: false
 save_video: true
 save_agent: true
-seed: 12345
+seed: 54321
 #device 
-cuda_device: cuda:0
+cuda_device: cuda:1
 
 
 # convenience
 work_dir: ???
 task_title: ???
 multitask: false
-tasks: walk
+tasks: basketball
 obs_shape: ???
 action_dim: ???
 episode_length: ???
@@ -100,9 +100,12 @@ bin_size: ???
 #planning w uncertainty
 rew_uncer_alpha_coef: 0.01
 dyn_uncer_beta_coef: 0.01
-q_uncertainty_coef: 1
-plan_mean_std: false
+q_uncertainty_coef: 0.01
+uncertainty_type: r
+
+plan_mean_std: true
 evaluate_w_uncer: false
 independant_updates: true
 planning_criteria: total_value
 uncertainity_rep: JRD
+#change seed, cuda device, plan_mean_std, in code change eval mode == false or true in estimate_uncertainty , q uncerterinty coef & plan_mean_std 
