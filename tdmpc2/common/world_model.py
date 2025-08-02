@@ -130,7 +130,7 @@ class WorldModel(nn.Module):
 		out = self._reward(z)
 		if return_type == 'all':
 			return out
-		ridx = torch.randperm(self.cfg.num_r_d, device=out.device)[:2]
+		ridx = torch.randperm(self.cfg.num_r_d, device=out.device)[:1]
 		r = out[ridx]
 		return r
 	
