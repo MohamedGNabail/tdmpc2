@@ -136,7 +136,7 @@ class TDMPC2(torch.nn.Module):
 	@torch.no_grad()
 	def _estimate_r_uncertainty(self, z, action ,task , eval_mode=False):
 		"""Estimates epistemic uncertainty, normalized by predicted value."""
-		if eval_mode == False:
+		if eval_mode == True:
 			return 0
 		rs = math.two_hot_inv(self.model.reward(z, action, task, return_type='all'), self.cfg)
 		if self.cfg.plan_mean_std: 

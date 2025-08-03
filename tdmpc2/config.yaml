@@ -27,7 +27,7 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: UBP_test_debug_now
+exp_name: UBP_train_r
 data_dir: ???
 
 # planning
@@ -77,7 +77,7 @@ compile: false
 save_video: true
 save_agent: true
 seed: 54321
-#device 
+#device
 cuda_device: cuda:1
 
 
@@ -99,7 +99,7 @@ bin_size: ???
 
 #planning w uncertainty
 rew_uncer_alpha_coef: 0.01
-dyn_uncer_beta_coef: 0.01
+dyn_uncer_beta_coef: 0
 q_uncertainty_coef: 0.01
 uncertainty_type: r
 

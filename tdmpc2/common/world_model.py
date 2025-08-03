@@ -132,7 +132,7 @@ class WorldModel(nn.Module):
 			return out
 		ridx = torch.randperm(self.cfg.num_r_d, device=out.device)[:1]
 		r = out[ridx]
-		return r
+		return r.squeeze(0)
 	
 	def termination(self, z, task, unnormalized=False):
 		"""
