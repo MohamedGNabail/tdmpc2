@@ -166,11 +166,11 @@ class TDMPC2(torch.nn.Module):
 			reward = math.two_hot_inv(self.model.reward(z, actions[t], task), self.cfg)
 			z = self.model.next(z, actions[t], task)
 			if self.cfg.uncertainty_type == 'q':
-				G = G + discount * (1-termination) * (reward - self._estimate_uncertainty(z, actions[t], task , eval_mode))
+				G = G + discount * (1-termination) * (reward + self._estimate_uncertainty(z, actions[t], task , eval_mode))
 			elif self.cfg.uncertainty_type == 'r':
-				G = G + discount * (1-termination) * (reward - self._estimate_r_uncertainty(z, actions[t], task , eval_mode))
+				G = G + discount * (1-termination) * (reward + self._estimate_r_uncertainty(z, actions[t], task , eval_mode))
 			elif self.cfg.uncertainty_type == 'd':
-				G = G + discount * (1-termination) * (reward - self._estimate_d_uncertainty(z, actions[t], task , eval_mode))
+				G = G + discount * (1-termination) * (reward + self._estimate_d_uncertainty(z, actions[t], task , eval_mode))
 
 			discount_update = self.discount[torch.tensor(task)] if self.cfg.multitask else self.discount
 			discount = discount * discount_update

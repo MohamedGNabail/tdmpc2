@@ -99,7 +99,7 @@ bin_size: ???
 
 #planning w uncertainty
 rew_uncer_alpha_coef: 0.01
-dyn_uncer_beta_coef: 0.01
+dyn_uncer_beta_coef: -0.01
 q_uncertainty_coef: 0
 uncertainty_type: d
 
