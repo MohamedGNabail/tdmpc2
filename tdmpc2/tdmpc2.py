@@ -150,10 +150,11 @@ class TDMPC2(torch.nn.Module):
 		if eval_mode == False:
 			return 0
 		rs = math.two_hot_inv(self.model.reward(z, action, task, return_type='all'), self.cfg)
+		zs = self.model.next(z, action, task, return_type='all')
 		if self.cfg.plan_mean_std: 
-			return rs.mean() * rs.std(0) * self.cfg.rew_uncer_alpha_coef
+			return rs.mean(0) * zs.std(0) * self.cfg.dyn_uncer_beta_coef
 		else:
-			return rs.std(0) * self.cfg.rew_uncer_alpha_coef
+			return zs.std(0) * self.cfg.dyn_uncer_beta_coef
 
 
 	@torch.no_grad()

@@ -27,7 +27,7 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: UBP_train_r
+exp_name: UBP_train_d_debug_only
 data_dir: ???
 
 # planning
@@ -99,9 +99,9 @@ bin_size: ???
 
 #planning w uncertainty
 rew_uncer_alpha_coef: 0.01
-dyn_uncer_beta_coef: 0
-q_uncertainty_coef: 0.01
-uncertainty_type: r
+dyn_uncer_beta_coef: 0.01
+q_uncertainty_coef: 0
+uncertainty_type: d
 
 plan_mean_std: true
 evaluate_w_uncer: false
