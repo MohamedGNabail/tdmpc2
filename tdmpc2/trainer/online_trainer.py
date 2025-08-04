@@ -110,7 +110,6 @@ class OnlineTrainer(Trainer):
 				action = self.env.rand_act()
 			obs, reward, done, info = self.env.step(action)
 			self._tds.append(self.to_td(obs, action, reward, info['terminated']))
-			print(f'Step {self._step}, OBS {obs}, Action: {action}, Reward: {reward}, Done: {done}')
 			# Update agent
 			if self._step >= self.cfg.seed_steps:
 				if self._step == self.cfg.seed_steps:

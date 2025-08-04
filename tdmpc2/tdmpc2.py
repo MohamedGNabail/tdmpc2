@@ -152,7 +152,7 @@ class TDMPC2(torch.nn.Module):
 		rs = math.two_hot_inv(self.model.reward(z, action, task, return_type='all'), self.cfg)
 		zs = self.model.next(z, action, task, return_type='all')
 		if self.cfg.plan_mean_std: 
-			return rs.mean(0) * zs.std(0) * self.cfg.dyn_uncer_beta_coef
+			return rs.mean(0) * (zs.std(0).sum(dim=-1)).unsqueeze(-1) * self.cfg.dyn_uncer_beta_coef
 		else:
 			return zs.std(0) * self.cfg.dyn_uncer_beta_coef
 
