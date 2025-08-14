@@ -46,6 +46,7 @@ def train(cfg: dict):
 	assert torch.cuda.is_available()
 	assert cfg.steps > 0, 'Must train for at least 1 step.'
 	cfg = parse_cfg(cfg)
+	cfg.seed = cfg.get("seed_value", cfg.seed)
 	cfg.dyn_uncer_beta_coef = cfg.get("dyn_uncer_beta_coef_value", cfg.dyn_uncer_beta_coef)
 	cfg.rew_uncer_alpha_coef = cfg.get("rew_uncer_alpha_coef_value", cfg.rew_uncer_alpha_coef)
 	cfg.data_dir = "/home/nabail/projects/def-rhinehar/nabail/logs/data/tdmpc2_seed_" + str(cfg.seed) + "_dyn_" + str(cfg.dyn_uncer_beta_coef)

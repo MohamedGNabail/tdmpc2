@@ -84,11 +84,11 @@ class EnsembleStochasticLinearUnitVariance(torch.nn.Module):
 
         self.lin1 = EnsembleLinear(in_features=in_features,
                                    out_features=hidden_features, ensemble_size=self.ensemble_size, bias=True)
-        self.lin2 = EnsembleLinear(in_features=hidden_features,
-                                   out_features=hidden_features * 2, ensemble_size=self.ensemble_size, bias=True)
-        self.lin3 = EnsembleLinear(in_features=hidden_features * 2,
-                                   out_features=hidden_features * 3, ensemble_size=self.ensemble_size, bias=True)
-        self.lin4 = EnsembleLinear(in_features=hidden_features * 3,
+        # self.lin2 = EnsembleLinear(in_features=hidden_features,
+        #                            out_features=hidden_features * 2, ensemble_size=self.ensemble_size, bias=True)
+        # self.lin3 = EnsembleLinear(in_features=hidden_features * 2,
+        #                            out_features=hidden_features * 3, ensemble_size=self.ensemble_size, bias=True)
+        self.lin4 = EnsembleLinear(in_features=hidden_features,
                                    out_features=hidden_features, ensemble_size=self.ensemble_size, bias=True)
         self.lin5 = EnsembleLinear(in_features=hidden_features,
                                    out_features=out_features, ensemble_size=self.ensemble_size, norm=False, bias=True)
@@ -104,8 +104,8 @@ class EnsembleStochasticLinearUnitVariance(torch.nn.Module):
     def forward(self, x):
         prev_x = x.clone().detach()  # save previous state (history)
         x = self.act(self.lin1(x))
-        x = self.act(self.lin2(x))
-        x = self.act(self.lin3(x))
+        # x = self.act(self.lin2(x))
+        # x = self.act(self.lin3(x))
         x = self.act(self.lin4(x))
         x = self.lin5(x)
 
@@ -130,8 +130,8 @@ class EnsembleStochasticLinearUnitVariance(torch.nn.Module):
     def single_forward(self, x, index):
         prev_x = x.clone().detach()  # save previous state
         x = self.act(self.lin1.single_forward(x, index))
-        x = self.act(self.lin2.single_forward(x, index))
-        x = self.act(self.lin3.single_forward(x, index))
+        # x = self.act(self.lin2.single_forward(x, index))
+        # x = self.act(self.lin3.single_forward(x, index))
         x = self.act(self.lin4.single_forward(x, index))
         x = self.lin5.single_forward(x, index)
         mu = x
@@ -147,11 +147,11 @@ class EnsembleStochasticLinear(torch.nn.Module):
         self.uncertainity = uncertainity   
         self.lin1 = EnsembleLinear(in_features=in_features,
                                    out_features=hidden_features, ensemble_size=self.ensemble_size, bias=True)
-        self.lin2 = EnsembleLinear(in_features=hidden_features,
-                                   out_features=hidden_features * 2, ensemble_size=self.ensemble_size, bias=True)
-        self.lin3 = EnsembleLinear(in_features=hidden_features * 2,
-                                   out_features=hidden_features * 3, ensemble_size=self.ensemble_size, bias=True)
-        self.lin4 = EnsembleLinear(in_features=hidden_features * 3,
+        # self.lin2 = EnsembleLinear(in_features=hidden_features,
+        #                            out_features=hidden_features * 2, ensemble_size=self.ensemble_size, bias=True)
+        # self.lin3 = EnsembleLinear(in_features=hidden_features * 2,
+        #                            out_features=hidden_features * 3, ensemble_size=self.ensemble_size, bias=True)
+        self.lin4 = EnsembleLinear(in_features=hidden_features,
                                    out_features=hidden_features, ensemble_size=self.ensemble_size, bias=True)
         self.lin5 = EnsembleLinear(in_features=hidden_features,
                                    out_features=out_features*2, ensemble_size=self.ensemble_size, norm=False, bias=True)
@@ -169,8 +169,8 @@ class EnsembleStochasticLinear(torch.nn.Module):
     def forward(self, x): # during planning (512, 516) Sample Size x Latent Dimension + Action
         prev_x = x.clone().detach()  # save previous state (history)
         x = self.act(self.lin1(x))
-        x = self.act(self.lin2(x))
-        x = self.act(self.lin3(x))
+        # x = self.act(self.lin2(x))
+        # x = self.act(self.lin3(x))
         x = self.act(self.lin4(x))
         x = self.lin5(x)             #[5,1,1024]
 
@@ -179,22 +179,27 @@ class EnsembleStochasticLinear(torch.nn.Module):
         log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
 
         std = torch.exp(log_std)
-        if self.uncertainity == "BC":
+        if self.uncertainity == "STD":
+            # Epistemic = disagreement in predicted means across ensemble
+            epistemic = mu.std(dim=0).mean(dim=-1, keepdim=True)  # [batch_size, 1]
+            # Aleatoric = mean predicted std dev across ensemble
+            aleatoric = std.mean(dim=0).mean(dim=-1, keepdim=True) # [batch_size, 1]
+        elif self.uncertainity == "BC":
             bc = BhattacharyyaOverlap(states_mean=mu, states_std=std).compute_measure()
             epistemic = bc[0].unsqueeze(1)  # [batch_size x1]
             aleatoric = std.mean(dim=0).mean(dim=-1).unsqueeze(1)  # [batch_sizex1]
         else:
             jrd_div = JensenRenyiDivergence(states_mean=mu, states_var=std.square()).compute_measure()
             epi_dis, aleatoric_dis = jrd_div
-            epistemic = epi_dis.abs().unsqueeze(1) #[24x1]
-            aleatoric  =  aleatoric_dis.abs().unsqueeze(1) #[24x1]
+            epistemic = epi_dis.abs().unsqueeze(1) #[batch_sizex1]
+            aleatoric  =  aleatoric_dis.abs().unsqueeze(1) #[batch_sizex1]
         return mu, epistemic, aleatoric
 
     def single_forward(self, x, index):
         prev_x = x.clone().detach()  # save previous state
         x = self.act(self.lin1.single_forward(x, index))
-        x = self.act(self.lin2.single_forward(x, index))
-        x = self.act(self.lin3.single_forward(x, index))
+        # x = self.act(self.lin2.single_forward(x, index))
+        # x = self.act(self.lin3.single_forward(x, index))
         x = self.act(self.lin4.single_forward(x, index))
         x = self.lin5.single_forward(x, index)
 

@@ -33,5 +33,5 @@ apptainer exec --nv \
     export MUJOCO_GL=disable
     export WANDB_MODE=offline
     export WANDB_DIR=/mnt/wandb_logs
-    python3 '$SCRIPT_PATH' seed_value=$seed
+    python3 '$SCRIPT_PATH' +seed_value=$seed
   "

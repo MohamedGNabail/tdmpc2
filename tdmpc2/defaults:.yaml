@@ -27,12 +27,12 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: exp_1_pred_reward
+exp_name: exp_1
 data_dir: ???
 
 # planning
 mpc: true
-iterations: 15
+iterations: 6
 num_samples: 512
 num_elites: 64
 num_pi_trajs: 24
@@ -103,10 +103,9 @@ dyn_uncer_beta_coef: 0
 q_uncertainty_coef: 0
 uncertainty_type: r
 
-pref_learn: false
+plan_mean_std: true
 evaluate_w_uncer: false
+independant_updates: true
 planning_criteria: total_value
-uncertainity_rep: BC
-#change seed, cuda device, in code change eval mode == false or true in estimate_uncertainty , q uncerterinty coef & plan_mean_std 
-
-
+uncertainity_rep: STD
+#change seed, cuda device, plan_mean_std, in code change eval mode == false or true in estimate_uncertainty , q uncerterinty coef & plan_mean_std 
