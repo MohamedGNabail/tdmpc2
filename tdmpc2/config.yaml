@@ -7,7 +7,7 @@ obs: state
 episodic: false
 
 # evaluation
-checkpoint: /mnt/tdmpc2/checkpoints/basketball/reward_driven
+checkpoint: /mnt/tdmpc2/checkpoints/basketball/uncer_driven
 eval_episodes: 10
 eval_freq: 5000
 
@@ -27,7 +27,7 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: exp_1_pred_reward
+exp_name: exp_1_std
 data_dir: ???
 
 # planning
@@ -98,15 +98,15 @@ bin_size: ???
 
 
 #planning w uncertainty
-rew_uncer_alpha_coef: 0
-dyn_uncer_beta_coef: 0
+rew_uncer_alpha_coef: 1
+dyn_uncer_beta_coef: 1
 q_uncertainty_coef: 0
 uncertainty_type: r
 
 pref_learn: false
 evaluate_w_uncer: false
 planning_criteria: total_value
-uncertainity_rep: BC
+uncertainity_rep: STD
 #change seed, cuda device, in code change eval mode == false or true in estimate_uncertainty , q uncerterinty coef & plan_mean_std 
 
 
