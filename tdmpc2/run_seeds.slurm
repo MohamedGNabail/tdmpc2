@@ -3,7 +3,7 @@
 #SBATCH --output=logs/tdmpc2_%A_%a.out
 #SBATCH --error=logs/tdmpc2_%A_%a.err
 #SBATCH --array=1-5       # 5 jobs, seeds 1 to 5
-#SBATCH --time=8:00:00
+#SBATCH --time=48:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=8G
 #SBATCH --gres=gpu:1
@@ -12,7 +12,8 @@
 module load apptainer
 
 # SLURM_ARRAY_TASK_ID will be used as the seed
-seed=$SLURM_ARRAY_TASK_ID
+seeds=(1 2)
+seed=${seeds[$((SLURM_ARRAY_TASK_ID-1))]}
 
 export WANDB_API_KEY=8a8ce7fbc7a816639a48369e34b70f2503528d06
 export WANDB_MODE=offline

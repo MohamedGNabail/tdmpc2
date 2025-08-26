@@ -87,8 +87,6 @@ class OnlineTrainer(Trainer):
 			if done:
 				if eval_next:
 					eval_metrics = self.eval()
-					os.makedirs(self.cfg.checkpoint, exist_ok=True)
-					self.agent.save(f"{self.cfg.checkpoint}{self.cfg.seed}-{self.cfg.uncertainity_rep}-{self._step}.pt")
 					eval_metrics.update(self.common_metrics())
 					self.logger.log(eval_metrics, 'eval')
 					eval_next = False
