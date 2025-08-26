@@ -2,12 +2,12 @@ defaults:
     - override hydra/launcher: submitit_local
 
 # environment
-task: mw-basketball
+task: mw-coffee-push
 obs: state
 episodic: false
 
 # evaluation
-checkpoint: /data/MohamedNabail/checkpoints/rnd/
+checkpoint: /data/MohamedNabail/checkpoints/coffee_push/1/rnd/
 eval_episodes: 10
 eval_freq: 5000
 
@@ -76,7 +76,7 @@ save_csv: true
 compile: false
 save_video: false
 save_agent: true
-seed: 4
+seed: 2
 #device
 cuda_device: cuda:0
 
