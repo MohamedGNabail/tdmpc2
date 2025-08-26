@@ -7,7 +7,7 @@ obs: state
 episodic: false
 
 # evaluation
-checkpoint: /data/MohamedNabail/checkpoints/vary_planning/0.8.pt
+checkpoint: /data/MohamedNabail/checkpoints/rnd/
 eval_episodes: 10
 eval_freq: 5000
 
@@ -27,7 +27,7 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: exp_2_planning_iter_bad_model
+exp_name: exp_3_rnd
 data_dir: ???
 
 # planning
@@ -61,7 +61,7 @@ mlp_reward_dim: 255
 latent_dim: 512
 task_dim: 96
 num_q: 5
-num_r_d: 5
+num_r_d: 1
 dropout: 0.01
 simnorm_dim: 8
 

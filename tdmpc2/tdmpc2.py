@@ -6,6 +6,7 @@ from common.scale import RunningScale
 from common.world_model import WorldModel
 from common.layers import api_model_conversion
 from common.loss import gaussian_nll_loss
+from common.rms import RunningMeanStd
 from tensordict import TensorDict
 
 from itertools import combinations
@@ -33,6 +34,7 @@ class TDMPC2(torch.nn.Module):
 			 }
 		], lr=self.cfg.lr, capturable=True)
 		self.pi_optim = torch.optim.Adam(self.model._pi.parameters(), lr=self.cfg.lr, eps=1e-5, capturable=True)
+		self.rnd_optim = torch.optim.Adam(self.model._rnd_predictor.parameters(), lr=self.cfg.lr, eps=1e-5, capturable=True)
 		self.model.eval()
 		self.scale = RunningScale(cfg)
 		self.cfg.iterations += 2*int(cfg.action_dim >= 20) # Heuristic for large action spaces
@@ -45,7 +47,7 @@ class TDMPC2(torch.nn.Module):
 		if cfg.compile:
 			print('Compiling update function with torch.compile...')
 			self._update = torch.compile(self._update, mode="reduce-overhead")
-
+		self.reward_int_rms = RunningMeanStd(shape=(), device=self.device)
 	@property
 	def plan(self):
 		_plan_val = getattr(self, "_plan_val", None)
@@ -205,7 +207,18 @@ class TDMPC2(torch.nn.Module):
 
 			# Adjusted reward (reward bonus shaping)
 			# Get mean magnitude of reward predictions for computing penalty, reward should not be negative in metaworld tasks but it is safer not to confuse the results by negating the signal of the alpha coefficient
-			adjusted_reward = reward + (rew_alpha * reward_epi_uncer) + (dyn_beta * dyn_epi_uncer)
+			# adjusted_reward = reward + (rew_alpha * reward_epi_uncer) + (dyn_beta * dyn_epi_uncer)
+			with torch.no_grad():
+				latent_rnd = self.model.rnd_predict(z, actions[t], task)
+				latent_rnd_target = self.model.rnd_target(z, actions[t], task)
+				raw_int_reward = F.mse_loss(latent_rnd_target, latent_rnd, reduction='none').mean(dim=-1 , keepdim=True)
+		 
+	
+			# Normalize intrinsic reward , just by variance, don't adjust the mean
+			self.reward_int_rms.update(raw_int_reward)
+			int_reward = raw_int_reward / torch.sqrt(self.reward_int_rms.var + 1e-8)
+
+			adjusted_reward = reward + (rew_alpha * int_reward)
 			G = G + discount * (1 - termination) * adjusted_reward
 
 			# Discount update
@@ -229,7 +242,7 @@ class TDMPC2(torch.nn.Module):
 		# Info for logging
 		info = {
 			"reward" : R,
-			"reward_epistemic": epi_rew,
+			"reward_epistemic": int_reward,
 			"reward_aleatoric": alea_rew,
 			"dynamics_epistemic": epi_dyn,
 		}
@@ -377,6 +390,51 @@ class TDMPC2(torch.nn.Module):
 			"pi_scale": self.scale.value,
 		})
 		return info
+
+	def update_rnd(self, _zs, action, task):
+		"""
+		Update rnd predictor network using a the first 3 timesteps of latent states for an observation _zs.
+
+		Args:
+			_zs (torch.Tensor): Sequence of latent states.
+			action (torch.Tensor): Sequence of actions.
+			task (torch.Tensor): Task index (only used for multi-task experiments).
+
+		Returns:
+			float: Loss of the rnd update.
+		"""
+		rnd_loss = torch.tensor(0.0, device=_zs.device)
+		for t in range(self.cfg.horizon):
+			latent_rnd = self.model.rnd_predict(_zs[t], action[t], task)
+			latent_rnd_target = self.model.rnd_target(_zs[t], action[t], task).detach()
+			rnd_loss = rnd_loss + F.mse_loss(latent_rnd_target, latent_rnd).mean()
+			
+		rnd_loss = rnd_loss / self.cfg.horizon
+
+        # Backpropagation and weight update
+		rnd_loss.backward()
+		self.rnd_optim.step()
+		self.rnd_optim.zero_grad(set_to_none=True)
+
+		info = TensorDict({
+			"rnd_loss": rnd_loss,
+		})
+		return info
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 	@torch.no_grad()
 	def _td_target(self, next_z, reward, terminated, task):
@@ -547,6 +605,9 @@ class TDMPC2(torch.nn.Module):
 			# Update policy
 			pi_info = self.update_pi(zs.detach(), task)
 
+			#Update Predictor RND network
+			rnd_info = self.update_rnd (_zs.detach(), action, task)
+
 			# Update target Q-functions
 			self.model.soft_update_target_Q()
 			consistency_loss_all =consistency_loss_all + consistency_loss 
@@ -570,6 +631,7 @@ class TDMPC2(torch.nn.Module):
 		if self.cfg.episodic:
 			info.update(math.termination_statistics(torch.sigmoid(termination_pred[-1]), terminated[-1]))
 		info.update(pi_info)
+		info.update(rnd_info)
 		return info.detach().mean()
 
 	def update(self, buffer, step):

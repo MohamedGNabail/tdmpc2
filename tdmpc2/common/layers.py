@@ -77,7 +77,7 @@ class EnsembleLinear(nn.Module):
 
 
 class EnsembleStochasticLinearUnitVariance(torch.nn.Module):
-    def __init__(self, in_features, out_features, hidden_features, ensemble_size=3, activation='relu'):
+    def __init__(self, in_features, out_features, hidden_features, ensemble_size=3, activation='relu' , stop_grad = False):
         super(EnsembleStochasticLinearUnitVariance, self).__init__()
         self.ensemble_size = ensemble_size
         self.n_output = out_features
@@ -101,6 +101,11 @@ class EnsembleStochasticLinearUnitVariance(torch.nn.Module):
         elif activation == 'softplus':
             self.act = nn.Softplus()
 
+        if stop_grad:
+            # freeze the weights of this network.
+            for param in self.parameters():
+                param.requires_grad = False
+    
     def forward(self, x):
         prev_x = x.clone().detach()  # save previous state (history)
         x = self.act(self.lin1(x))

@@ -27,6 +27,8 @@ class WorldModel(nn.Module):
 		# self._reward = layers.Ensemble([layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1)) for _ in range(cfg.num_r_d)]) # this is the old reward model, replaced with pref model 
 		#self._reward =layers.Ensemble([layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 3*[cfg.mlp_reward_dim], 1 , hidden_act=nn.LeakyReLU() , act=nn.Hardtanh(0.0, 1000.0) , Normed=False) for _ in range(cfg.num_r_d)])
 		self._dynamics = EnsembleStochasticLinearUnitVariance(cfg.latent_dim + cfg.action_dim + cfg.task_dim, cfg.mlp_dim, cfg.latent_dim, ensemble_size=cfg.num_r_d) 
+		self._rnd_predictor = EnsembleStochasticLinearUnitVariance(cfg.latent_dim + cfg.action_dim + cfg.task_dim, cfg.mlp_dim, cfg.latent_dim, ensemble_size=1) 
+		self._rnd_target = EnsembleStochasticLinearUnitVariance(cfg.latent_dim + cfg.action_dim + cfg.task_dim, cfg.mlp_dim, cfg.latent_dim, ensemble_size=1 , stop_grad=True) 
 		self._reward = EnsembleStochasticLinear(cfg.latent_dim + cfg.action_dim + cfg.task_dim, cfg.mlp_dim, 1, ensemble_size=cfg.num_r_d , activation='leaky_relu' , uncertainity=self.cfg.uncertainity_rep) # this is the new reward model, replaced with pref model
 		self._termination = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 1) if cfg.episodic else None
 		self._pi = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 2*cfg.action_dim)
@@ -213,6 +215,24 @@ class WorldModel(nn.Module):
 			"scaled_entropy": -log_prob * entropy_scale,
 		})
 		return action, info
+
+	def rnd_predict(self, z, a, task):
+		"""
+		Predicts the output of the RND predictor network.
+		"""
+		if self.cfg.multitask:
+			z = self.task_emb(z, task)
+		z = torch.cat([z, a], dim=-1) #( 24 x 516) batch size x latent_dim + action_dim
+		return self._rnd_predictor(z)[0].squeeze(0) #only return mean
+	
+	def rnd_target(self, z, a, task):
+		"""
+		Predicts the output of the RND taregt network.
+		"""
+		if self.cfg.multitask:
+			z = self.task_emb(z, task)
+		z = torch.cat([z, a], dim=-1) #( 24 x 516) batch size x latent_dim + action_dim
+		return self._rnd_target(z)[0].squeeze(0) #only return mean
 
 	def Q(self, z, a, task, return_type='min', target=False, detach=False):
 		"""
