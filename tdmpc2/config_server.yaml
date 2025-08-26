@@ -7,7 +7,7 @@ obs: state
 episodic: false
 
 # evaluation
-checkpoint: /mnt/tdmpc2/checkpoints/basketball/rnd
+checkpoint: /mnt/tdmpc2/checkpoints/assembly/rnd
 eval_episodes: 10
 eval_freq: 5000
 
