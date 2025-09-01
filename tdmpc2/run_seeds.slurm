@@ -28,7 +28,7 @@ apptainer exec --nv \
   "$SIF_PATH" \
   bash --login -c "
     source \$(conda info --base)/etc/profile.d/conda.sh
-    conda activate ubp
+    conda activate ubp2
     cd /mnt/tdmpc2
     export MUJOCO_GL=disable
     export WANDB_MODE=offline
