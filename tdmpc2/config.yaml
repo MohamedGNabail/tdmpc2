@@ -7,7 +7,7 @@ obs: state
 episodic: false
 
 # evaluation
-checkpoint: /mnt/tdmpc2/checkpoints/basketball/planning_iterations
+checkpoint: /mnt/tdmpc2/checkpoints/basketball/sparse
 eval_episodes: 10
 eval_freq: 5000
 
@@ -27,7 +27,7 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: exp_2_planning_iterations
+exp_name: exp_4_sparse_10
 data_dir: ???
 
 # planning
@@ -65,11 +65,15 @@ num_r_d: 5
 dropout: 0.01
 simnorm_dim: 8
 
+# Polyak coefficient for target policy
+polyak_tau: 0.005  
+
+
 # logging
 wandb_project: UBP_DEBUG
 wandb_entity: mohamednabail_leaf
 wandb_silent: false
-enable_wandb: true
+enable_wandb: false
 save_csv: true
 
 # misc
@@ -98,14 +102,13 @@ bin_size: ???
 
 
 #planning w uncertainty
-rew_uncer_alpha_coef: 2
-dyn_uncer_beta_coef: 2
-q_uncertainty_coef: 0
-uncertainty_type: r
+rew_uncer_alpha_coef: 1 #default is 1
+dyn_uncer_beta_coef: 1 #default is 1 
+sparse_reward_freq: 1 #default is 1 , change to make the frequency once every this value
 
 pref_learn: false
 evaluate_w_uncer: false
-planning_criteria: total_value
+planning_criteria: total_value #default is total_value, don't use ubp_reward it is wrong as tested before
 uncertainity_rep: JRD
 #change seed, cuda device, in code change eval mode == false or true in estimate_uncertainty , q uncerterinty coef & plan_mean_std 
 

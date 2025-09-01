@@ -2,7 +2,7 @@ from copy import deepcopy
 
 import torch
 import torch.nn as nn
-
+import copy 
 from common import layers, math, init
 from tensordict import TensorDict
 from tensordict.nn import TensorDictParams
@@ -30,6 +30,7 @@ class WorldModel(nn.Module):
 		self._reward = EnsembleStochasticLinear(cfg.latent_dim + cfg.action_dim + cfg.task_dim, cfg.mlp_dim, 1, ensemble_size=cfg.num_r_d , activation='leaky_relu' , uncertainity=self.cfg.uncertainity_rep) # this is the new reward model, replaced with pref model
 		self._termination = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 1) if cfg.episodic else None
 		self._pi = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 2*cfg.action_dim)
+		self._pi_bar = copy.deepcopy(self._pi)
 		self._Qs = layers.Ensemble([layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1), dropout=cfg.dropout) for _ in range(cfg.num_q)])
 		self.apply(init.weight_init)
 		# init.zero_([self._reward.params["2"]["weight"], self._Qs.params["2", "weight"]]) #no need in pref model 
@@ -171,6 +172,32 @@ class WorldModel(nn.Module):
 			return self._termination(z)
 		return torch.sigmoid(self._termination(z))
 		
+	def pi_bar(self, z, task):
+		"""
+		Samples an action from the target policy prior.
+		The policy prior is a Gaussian distribution with
+		mean and (log) std predicted by a neural network.
+		"""
+		if self.cfg.multitask:
+			z = self.task_emb(z, task)
+
+		# Gaussian policy prior
+		mean, log_std = self._pi_bar(z).chunk(2, dim=-1)
+		log_std = math.log_std(log_std, self.log_std_min, self.log_std_dif)
+		eps = torch.randn_like(mean)
+
+		if self.cfg.multitask: # Mask out unused action dimensions
+			mean = mean * self._action_masks[task]
+			log_std = log_std * self._action_masks[task]
+			eps = eps * self._action_masks[task]
+
+		log_prob = math.gaussian_logprob(eps, log_std)
+
+		# Reparameterization trick
+		action = mean + eps * log_std.exp()
+		mean, action, log_prob = math.squash(mean, action, log_prob)
+
+		return action
 
 	def pi(self, z, task):
 		"""

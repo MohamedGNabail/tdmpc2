@@ -20,11 +20,13 @@ class MetaWorldWrapper(gym.Wrapper):
 		self.env.step(np.zeros(self.env.action_space.shape))
 		return obs
 
-	def step(self, action):
+	def step(self, action , time_step):
 		reward = 0
 		for _ in range(2):
 			obs, r, _, truncated ,info = self.env.step(action.copy())
 			reward += r
+		#make reward sparse
+		reward = reward if (time_step % self.cfg.sparse_reward_freq == 0) else 0
 		obs = obs.astype(np.float32)
 		return obs, reward, False, info
 

@@ -8,6 +8,7 @@
       "program": "${workspaceFolder}/tdmpc2/train.py",
       "args": [],
       "console": "integratedTerminal",
+      "python": "/home/MohamedNabail/tools/anaconda/anaconda3/envs/ubp/bin/python", 
       "justMyCode": false,
       "env": {
         "PYTHONWARNINGS": "error",         

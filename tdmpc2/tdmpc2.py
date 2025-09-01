@@ -33,6 +33,10 @@ class TDMPC2(torch.nn.Module):
 			 }
 		], lr=self.cfg.lr, capturable=True)
 		self.pi_optim = torch.optim.Adam(self.model._pi.parameters(), lr=self.cfg.lr, eps=1e-5, capturable=True)
+		self.log_rew_uncer_autotune = torch.nn.Parameter(torch.zeros(1 , device = self.device)) # initialize log(lambda)
+		self.log_rew_uncer_autotune_optimizer = torch.optim.Adam([self.log_rew_uncer_autotune], lr=self.cfg.lr, eps=1e-5, capturable=True)
+		self.log_dyn_uncer_autotune = torch.nn.Parameter(torch.zeros(1 , device = self.device))  # initialize log(lambda)
+		self.log_dyn_uncer_autotune_optimizer = torch.optim.Adam([self.log_dyn_uncer_autotune], lr=self.cfg.lr, eps=1e-5, capturable=True)
 		self.model.eval()
 		self.scale = RunningScale(cfg)
 		self.cfg.iterations += 2*int(cfg.action_dim >= 20) # Heuristic for large action spaces
@@ -126,6 +130,10 @@ class TDMPC2(torch.nn.Module):
 		# Reward prediction
 		reward, reward_epi_uncer, reward_aleatoric_uncer = self.model.reward(z, action, task)
 
+		# Compute λ from log_lambda
+		dyn_uncer_autotune = torch.exp(self.log_dyn_uncer_autotune) 
+		rew_uncer_autotune = torch.exp(self.log_rew_uncer_autotune)  
+
 		# Transition prediction
 		z, dyn_epi_uncer = self.model.next(z, action, task)
 
@@ -141,6 +149,8 @@ class TDMPC2(torch.nn.Module):
 			"reward": reward.squeeze(0),                     # scalar
 			"reward_epistemic": reward_epi_uncer.squeeze(0), # scalar
 			"reward_aleatoric": reward_aleatoric_uncer.squeeze(0), # scalar
+			"rew_uncer_autotune": rew_uncer_autotune , #scalar
+			"dyn_uncer_autotune": dyn_uncer_autotune , #scalar
 			"dyn_epistemic": dyn_epi_uncer.squeeze(0),       # scalar
 			"ubp_reward": adjusted_reward.squeeze(0),   # scalar
 		}
@@ -187,6 +197,8 @@ class TDMPC2(torch.nn.Module):
 		R          = torch.zeros_like(z[:, :1])
 		discount   = torch.ones(1, device=z.device)  # scalar tensor
 		ubp_reward = torch.zeros_like(z[:, :1])
+		rew_uncer_lambda = torch.zeros_like(z[:, :1])
+		dyn_uncer_lambda = torch.zeros_like(z[:, :1])
 		epi_rew    = torch.zeros_like(z[:, :1])
 		alea_rew   = torch.zeros_like(z[:, :1])
 		epi_dyn    = torch.zeros_like(z[:, :1])
@@ -203,9 +215,12 @@ class TDMPC2(torch.nn.Module):
 			dyn_beta = 0 if eval_mode else self.cfg.dyn_uncer_beta_coef
 			rew_alpha = 0 if eval_mode else self.cfg.rew_uncer_alpha_coef
 
+			# Compute λ from log_lambda
+			dyn_uncer_autotune = torch.exp(self.log_dyn_uncer_autotune) 
+			rew_uncer_autotune = torch.exp(self.log_rew_uncer_autotune)  
+
 			# Adjusted reward (reward bonus shaping)
-			# Get mean magnitude of reward predictions for computing penalty, reward should not be negative in metaworld tasks but it is safer not to confuse the results by negating the signal of the alpha coefficient
-			adjusted_reward = reward + (rew_alpha * reward_epi_uncer) + (dyn_beta * dyn_epi_uncer)
+			adjusted_reward = reward + (rew_alpha * rew_uncer_autotune * reward_epi_uncer) + (dyn_beta * dyn_uncer_autotune * dyn_epi_uncer)
 			G = G + discount * (1 - termination) * adjusted_reward
 
 			# Discount update
@@ -221,6 +236,8 @@ class TDMPC2(torch.nn.Module):
 			ubp_reward += adjusted_reward
 			epi_rew += reward_epi_uncer
 			alea_rew += reward_aleatoric_uncer
+			rew_uncer_lambda += rew_uncer_autotune
+			dyn_uncer_lambda += dyn_uncer_autotune
 			epi_dyn += dyn_epi_uncer
 
 		# Bootstrap value from final state
@@ -231,6 +248,8 @@ class TDMPC2(torch.nn.Module):
 			"reward" : R,
 			"reward_epistemic": epi_rew,
 			"reward_aleatoric": alea_rew,
+			"rew_uncer_autotune": rew_uncer_lambda / self.cfg.horizon,
+			"dyn_uncer_autotune": dyn_uncer_lambda / self.cfg.horizon,
 			"dynamics_epistemic": epi_dyn,
 		}
 		value = value.nan_to_num(0)
@@ -336,6 +355,8 @@ class TDMPC2(torch.nn.Module):
 			"reward": elite_info["reward"][rand_idx].squeeze(0), #reward of the random action chosen from the elite actions, scaler 
 			"reward_epistemic": elite_info["reward_epistemic"][rand_idx].squeeze(0), #reward epi uncertainty of the random action chosen from the elite actions, scaler
 			"reward_aleatoric":  elite_info["reward_aleatoric"][rand_idx].squeeze(0),#reward  aleatoric of the random action chosen from the elite actions, scaler
+			"rew_uncer_autotune": elite_info["rew_uncer_autotune"][rand_idx].squeeze(0), #reward epi uncertainty of the random action chosen from the elite actions, scaler
+			"dyn_uncer_autotune":  elite_info["dyn_uncer_autotune"][rand_idx].squeeze(0),#reward  aleatoric of the random action chosen from the elite actions, scaler
 			"dyn_epistemic": elite_info["dynamics_epistemic"][rand_idx].squeeze(0), #dyn epi uncertainty of the random action chosen from the elite actions, scaler
 			"ubp_reward":  elite_ubp_reward[rand_idx].squeeze(0)  #ubp reward of the random action chosen from the elite actions, scaler 
 		}
@@ -344,7 +365,40 @@ class TDMPC2(torch.nn.Module):
 			a = a + std * torch.randn(self.cfg.action_dim, device=std.device)
 		self._prev_mean.copy_(mean)
 		return a.clamp(-1, 1), info
-	
+
+
+	def update_autotune(self , zs, task):
+		action, _ = self.model.pi(zs, task)
+		action_bar = self.model.pi_bar(zs, task)
+		zs_stacked = zs.reshape(-1, zs.shape[-1])
+		action_stacked = action.reshape(-1, action.shape[-1])
+		action_bar_stacked = action_bar.reshape(-1, action_bar.shape[-1])
+
+		# Compute Dynamics uncertainty
+		_, dyn_epi_uncer = self.model.next(zs_stacked, action_stacked, task)
+		_, dyn_epi_uncer_bar = self.model.next(zs_stacked, action_bar_stacked, task)
+
+		#dyn uncertainty autotune update
+		log_dyn_uncer_autotune_loss = (self.log_dyn_uncer_autotune * (dyn_epi_uncer - dyn_epi_uncer_bar).detach()).mean()  # detach diff so that gradients don't flow into pi
+		# Backprop and optimizer step for dyn uncertainty autotune
+		log_dyn_uncer_autotune_loss.backward()
+		self.log_dyn_uncer_autotune_optimizer.step()
+		self.log_dyn_uncer_autotune_optimizer.zero_grad()
+
+
+
+		# Compute Reward uncertainty
+		_ , reward_epi_uncer, _ = self.model.reward(zs_stacked, action_stacked, task)
+		_ , reward_epi_uncer_bar, _ = self.model.reward(zs_stacked, action_bar_stacked, task)
+
+		#reward uncertainty autotune update
+		log_rew_uncer_autotune_loss = (self.log_rew_uncer_autotune * (reward_epi_uncer - reward_epi_uncer_bar).detach()).mean()  # detach diff so that gradients don't flow into pi
+		# Backprop and optimizer step for reward uncertainty autotune
+		log_rew_uncer_autotune_loss.backward()
+		self.log_rew_uncer_autotune_optimizer.step()
+		self.log_rew_uncer_autotune_optimizer.zero_grad()
+
+
 	def update_pi(self, zs, task):
 		"""
 		Update policy using a sequence of latent states.
@@ -546,6 +600,15 @@ class TDMPC2(torch.nn.Module):
 
 			# Update policy
 			pi_info = self.update_pi(zs.detach(), task)
+
+			# Update target policy
+			with torch.no_grad():
+				for param, target_param in zip(self.model._pi.parameters(), self.model._pi_bar.parameters()):
+					target_param.data.mul_(1 - self.cfg.polyak_tau)
+					target_param.data.add_(self.cfg.polyak_tau * param.data)
+
+			# Update autotunning param
+			self.uncer_autotune = self.update_autotune(zs.detach(), task)
 
 			# Update target Q-functions
 			self.model.soft_update_target_Q()
