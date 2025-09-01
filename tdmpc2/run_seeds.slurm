@@ -12,7 +12,7 @@
 module load apptainer
 
 # SLURM_ARRAY_TASK_ID will be used as the seed
-seed=${seeds[$((SLURM_ARRAY_TASK_ID-1))]}
+seed=$SLURM_ARRAY_TASK_ID
 
 export WANDB_API_KEY=8a8ce7fbc7a816639a48369e34b70f2503528d06
 export WANDB_MODE=offline
