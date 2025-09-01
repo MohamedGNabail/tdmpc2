@@ -104,7 +104,7 @@ bin_size: ???
 #planning w uncertainty
 rew_uncer_alpha_coef: 1 #default is 1
 dyn_uncer_beta_coef: 1 #default is 1 
-sparse_reward_freq: 1 #default is 1 , change to make the frequency once every this value
+sparse_reward_freq: 10 #default is 1 , change to make the frequency once every this value
 
 pref_learn: false
 evaluate_w_uncer: false
