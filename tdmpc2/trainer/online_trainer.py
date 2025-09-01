@@ -114,7 +114,6 @@ class OnlineTrainer(Trainer):
 				action , action_info = self.agent.rand_act(obs, self.env)
 			action = action.cpu()
 			obs, reward, done, info = self.env.step(action)
-			print("obs" , obs , "reward" , reward , "action" , action , "done" , done)
 			# Store in point cloud
 			# self._obs_pointcloud[self._obs_index, :3] = obs[:3].numpy()
 			# self._obs_pointcloud[self._obs_index, 3:] = [0, 255, 0]
