@@ -57,7 +57,6 @@ class DMControlWrapper(gym.Env):
 		for _ in range(2):
 			step = self.env.step(action)
 			reward += step.reward
-		#reward = reward if (time_step % self.cfg.sparse_reward_freq == 0) else 0
 		return self._obs_to_array(step.observation), reward, False, defaultdict(float)
 	
 	def render(self, width=384, height=384, camera_id=None):

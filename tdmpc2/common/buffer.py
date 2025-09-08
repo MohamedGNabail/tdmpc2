@@ -113,3 +113,17 @@ class Buffer():
 		"""Sample a batch of subsequences from the buffer."""
 		td = self._buffer.sample().view(-1, self.cfg.horizon+1).permute(1, 0)
 		return self._prepare_batch(td)
+
+	def last_K(self):
+		"""Return all of the last K steps of the buffer as subsequences."""
+		storage_len = len(self._buffer._storage)
+		K = self.cfg.pref_update_freq
+		if K > storage_len:
+			K = storage_len
+		
+		# Take the last K transitions
+		td = self._buffer._storage[storage_len - K : storage_len]
+
+		# Reshape into subsequences of length horizon+1
+		td = td.view(-1, self.cfg.horizon+1).permute(1, 0)
+		return self._prepare_batch(td)

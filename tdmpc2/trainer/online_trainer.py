@@ -152,7 +152,10 @@ class OnlineTrainer(Trainer):
 				else:
 					num_updates = 1
 				for update_i in range(num_updates):
-					_train_metrics = self.agent.update(self.buffer, self._step)
+					if self.cfg.pref_learn:
+						_train_metrics = self.agent.update(self.buffer, add_pref=(self._step >= self.cfg.pref_update_freq and self._step % self.cfg.pref_update_freq == 0))
+					else:
+						_train_metrics = self.agent.update(self.buffer, add_pref=False)
 				train_metrics.update(_train_metrics)
 
 			self._step += 1

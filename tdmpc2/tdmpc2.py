@@ -5,7 +5,8 @@ from common import math
 from common.scale import RunningScale
 from common.world_model import WorldModel
 from common.layers import api_model_conversion
-from common.loss import gaussian_nll_loss
+from common.pref_buffer import PrefBuffer
+
 from tensordict import TensorDict
 
 from itertools import combinations
@@ -49,7 +50,9 @@ class TDMPC2(torch.nn.Module):
 		if cfg.compile:
 			print('Compiling update function with torch.compile...')
 			self._update = torch.compile(self._update, mode="reduce-overhead")
-
+		if self.cfg.pref_learn:
+			self.total_pref_feedback = 0
+			self.pref_buffer = PrefBuffer(cfg)
 	@property
 	def plan(self):
 		_plan_val = getattr(self, "_plan_val", None)
@@ -450,77 +453,6 @@ class TDMPC2(torch.nn.Module):
 		discount = self.discount[task].unsqueeze(-1) if self.cfg.multitask else self.discount
 		return reward + discount * (1-terminated) * self.model.Q(next_z, action, task, return_type='min', target=True)
 
-	def _compute_reward_loss(self, _zs, action, rewards, member ,task):
-		"""
-		_zs: [3, 256 , 512] latent observation for 3 time steps, 256 samples (from batch size) and 512 latent dimension
-		action: [3 , 256 , 4] actions for 3 time steps, 256 samples (from batch size) and 512 action dimenion  
-		rewards : [3 , 256 , 1] actual rewards for 3 timesteps for 256 samples (from batch size) and 1 scaler reward
-
-		returns reward loss for preferences using sigmoid loss 
-		"""
-		T, N, _ = _zs.shape
-
-		# Discount vector
-		discount_factors = (self.cfg.rho ** torch.arange(T, device=self.cfg.cuda_device).float()).view(T, 1, 1)
-		# Discounted sum of true rewards: [N, 1]
-		discounted_true_rewards = (rewards * discount_factors).sum(dim=0).view(N) #[N]
-		pair_indices = list(combinations(range(N), 2))  # [(i, j)]
-		# Step 1: Convert to index tensors
-		pair_indices = torch.tensor(pair_indices, device=_zs.device)  # [M, 2]
-		i_idx = pair_indices[:, 0]  # [M]
-		j_idx = pair_indices[:, 1]  # [M]
-
-		# Step 2: Get rewards for both sides
-		r_i = discounted_true_rewards[i_idx]  # [M]
-		r_j = discounted_true_rewards[j_idx]  # [M]
-
-		# Step 3: Compare and filter
-		# Mask where rewards are not equal
-		not_equal = r_i != r_j  # [M]
-		greater = r_i > r_j     # [M]
-
-		# Filter only non-equal pairs
-		i_idx = i_idx[not_equal]
-		j_idx = j_idx[not_equal]
-		greater = greater[not_equal]
-
-		# Step 4: Assign chosen/rejected based on comparison
-		chosen_indices = torch.where(greater, i_idx, j_idx)     # [M']
-		rejected_indices = torch.where(greater, j_idx, i_idx)   # [M']
-		
-
-		# Flatten from [T, N, ...] to [T*N, ...]
-		zs_flat = _zs.reshape(T * N, -1)            # [T*N, latent_dim]
-		action_flat = action.reshape(T * N, -1)     # [T*N, action_dim]
-
-		# Call model on flattened input
-		mu_flat, var_flat = self.model.reward_single_member(zs_flat, action_flat, index=member, task=task)  # [T*N]
-
-		# Reshape back to [T, N]
-		mu = mu_flat.view(T, N)
-		var = var_flat.view(T, N)
-
-		# Sum over time to get trajectory-level mean/var
-		total_means = (mu * discount_factors.view(T, 1)).sum(dim=0)        # [N]
-		total_vars = (var * (discount_factors.view(T, 1) ** 2)).sum(dim=0)     # [N]
-
-		# Get chosen vs rejected
-		var_c = total_vars[chosen_indices]     # [M]
-		var_r = total_vars[rejected_indices]   # [M]
-
-		mean_z = total_means[chosen_indices]  - total_means[rejected_indices]
-		var_z = torch.sqrt(var_c**2 + var_r**2 + 1e-8)
-
-		# MC loss estimation
-		num_sample = 1000
-		z_samples = torch.randn(num_sample, var_z.size(0), device=var_z.device, dtype=torch.float32)
-		z_samples = z_samples * var_z.unsqueeze(0) + mean_z.unsqueeze(0)
-		loss = -torch.nn.functional.logsigmoid(z_samples).mean()
-		return loss
-
-	
-	
-
 	def _update_independant(self, obs, action, reward, terminated, task=None):
 		"""
 		# Updating the loss is not dependant on episetmic uncertainty, the variance of each single member is only used for its loss computation only
@@ -534,7 +466,6 @@ class TDMPC2(torch.nn.Module):
 			#Compute Targets using the true rewards and true next states (encoded) to be passed to the Q model. 
 			# True input used : rewards, terminated status, next observed stated. 
 			# World Model prediction is used in encoded next states, Q value estimate given the encoded next states and predicted action from policy
-			# #TODO MN: Why were true actions not used even though they are available from the buffer
 			with torch.no_grad():
 				next_z = self.model.encode(obs[1:], task) # [T,B, D] the latent dimension of the next states of the current observation in the selected sequence [observation at T=2,3,4] ie target next states for the current state
 				td_targets = self._td_target(next_z, reward, terminated, task) #[T,B,1] target expected return starting from current state
@@ -561,14 +492,24 @@ class TDMPC2(torch.nn.Module):
 			qs = self.model.Q(_zs, action, task, return_type='all')
 
 			if self.cfg.pref_learn:
-				reward_loss = self._compute_reward_loss(_zs, action, reward, member ,task)
+				reward_loss = 0
+				pref_z1, pref_z2, pref_a1, pref_a2, labels = self.pref_buffer.sample()
+				# get logits
+				rhat_1 = torch.zeros(self.cfg.num_pref_sampled , device=pref_z1.device)
+				rhat_2 = torch.zeros(self.cfg.num_pref_sampled , device=pref_z2.device)
+				for t in range(self.cfg.horizon):
+					rhat_1 = rhat_1 + (self.model.reward_single_member(pref_z1[t], pref_a1[t], index=member, task=None)[0] * self.cfg.rho**t).squeeze(-1)
+					rhat_2 = rhat_2 + (self.model.reward_single_member(pref_z2[t], pref_a2[t], index=member, task=None)[0] * self.cfg.rho**t).squeeze(-1)
+				r_hat = torch.stack([rhat_1, rhat_2], dim=-1)  # shape: [batch_size, 2]
+				reward_loss = nn.CrossEntropyLoss(ignore_index=-1)(r_hat, labels)
 			else:
 				# Compute losses
 				reward_loss = 0
 				for t in range(self.cfg.horizon):
 					reward_pred_mean, reward_pred_var = self.model.reward_single_member(_zs[t], action[t], index=member, task=task)
 					reward_loss = reward_loss + F.mse_loss(reward_pred_mean, reward[t]).mean() * self.cfg.rho**t
-				
+				reward_loss = reward_loss / self.cfg.horizon
+
 			if self.cfg.episodic:
 				termination_pred = self.model.termination(zs[1:], task, unnormalized=True)
 
@@ -579,7 +520,6 @@ class TDMPC2(torch.nn.Module):
 					value_loss = value_loss + math.soft_ce(qs_unbind_unbind, td_targets_unbind, self.cfg).mean() * self.cfg.rho**t
 
 			consistency_loss = consistency_loss / self.cfg.horizon
-			reward_loss = reward_loss / self.cfg.horizon
 			if self.cfg.episodic:
 				termination_loss = F.binary_cross_entropy_with_logits(termination_pred, terminated)
 			else:
@@ -635,7 +575,8 @@ class TDMPC2(torch.nn.Module):
 		info.update(pi_info)
 		return info.detach().mean()
 
-	def update(self, buffer, step):
+
+	def update(self, buffer, add_pref):
 		"""
 		Main update function. Corresponds to one iteration of model learning.
 
@@ -646,8 +587,96 @@ class TDMPC2(torch.nn.Module):
 			dict: Dictionary of training statistics.
 		"""
 		obs, action, reward, terminated, task = buffer.sample()
+		if self.cfg.pref_learn and add_pref and self.total_pref_feedback < self.cfg.max_pref_feedback:
+			pref_obs, pref_action, pref_reward, pref_terminated, pref_task = buffer.last_K()
+			self._add_reward_pref(pref_obs, pref_action, pref_reward, pref_task)
 		kwargs = {}
 		if task is not None:
 			kwargs["task"] = task
 		torch.compiler.cudagraph_mark_step_begin()
 		return self._update_independant(obs, action, reward, terminated, **kwargs)
+
+	# Helper functions for preference learning
+	def _add_reward_pref(self, obs, action, reward, task):
+		"""
+		obs: [4, 256 , 512] latent observation for 4 time steps, 256 samples (from batch size) and 512 latent dimension
+		action: [3 , 256 , 4] actions for 3 time steps, 256 samples (from batch size) and 512 action dimenion  
+		rewards : [3 , 256 , 1] actual rewards for 3 timesteps for 256 samples (from batch size) and 1 scaler reward
+
+		adds preference labels to buffer 
+		"""
+		with torch.no_grad():
+			z = self.model.encode(obs[:-1], task) # [T,B, D] the latent dimension of the next states of the current observation in the selected sequence [observation at T=1,2,3] ie target latent states for the current obs
+		
+		z1, z2, a1, a2, tr1, tr2 = self.pref_create_pairs(z , action, reward, task)
+		if self.cfg.optimistic_pref_sampling:
+			optimistic_pref = self.pref_ranking_prob(z1, z2, a1, a2)
+			top_opt_pref_index = (-optimistic_pref).argsort()[:self.cfg.num_pref_sampled]
+		else:
+			top_opt_pref_index = torch.randperm(z1.shape[1], device=z1.device)[:self.cfg.num_pref_sampled]
+
+		# get labels
+		labels = self.pref_label(z1[:,top_opt_pref_index,:],
+								z2[:,top_opt_pref_index,:],
+								a1[:,top_opt_pref_index,:],
+								a2[:,top_opt_pref_index,:],
+								tr1[:,top_opt_pref_index,:], 
+								tr2[:,top_opt_pref_index,:])     
+		self.pref_buffer.add(
+			z1[:, top_opt_pref_index, :],
+			z2[:, top_opt_pref_index, :],
+			a1[:, top_opt_pref_index, :],
+			a2[:, top_opt_pref_index, :],
+			labels
+		)
+		self.total_pref_feedback = self.total_pref_feedback + self.cfg.num_pref_sampled
+
+
+	def pref_ranking_prob(self, z1, z2, a1, a2):
+		T, num_pairs, _ = z1.shape
+		discount_factors = (self.cfg.rho ** torch.arange(T, device=self.cfg.cuda_device).float()).view(T, 1, 1)
+		probs = torch.zeros(self.cfg.num_r_d, num_pairs, device=z1.device)  # to store the probabilities from each member [num members, num pairs]
+		for member in range(self.cfg.num_r_d):
+			# Flatten from [T, N, ...] to [T*N, ...], Call model on flattened input, revert model output back to [T, N]
+			r_hat_t1= self.model.reward_single_member(z1.reshape(T * num_pairs, -1), a1.reshape(T * num_pairs, -1), index=member, task=None)[0].view(T, num_pairs)  # only return mean reward [num pairs = N/2]
+			r_hat_t2= self.model.reward_single_member(z2.reshape(T * num_pairs, -1),  a2.reshape(T * num_pairs, -1), index=member, task=None)[0].view(T, num_pairs)  # only return mean reward [num pairs = N/2]
+
+			# Sum over time to get trajectory-level mean
+			r1 = (r_hat_t1 * discount_factors.view(T, 1)).sum(dim=0)        # [num pairs = N/2]
+			r2 = (r_hat_t2 * discount_factors.view(T, 1)).sum(dim=0)        # [num pairs = N/2]
+
+			# Concatenate and softmax
+			r_hat = torch.stack([r1, r2], dim=-1)        		  # [B//2, 2]
+			probs[member] = F.softmax(r_hat, dim=-1)[:, 0]        # prob(traj1 > traj2)
+			
+		# compute mean and std along the "ensemble dimension"
+		optimistic_pref = probs.mean(dim=0) + probs.std(dim=0) 
+		return optimistic_pref
+
+	def pref_label(self, z1, z2, a1, a2, tr1, tr2):
+		T, num_pref, _ = z1.shape
+		discount_factors = (self.cfg.rho ** torch.arange(T, device=self.cfg.cuda_device).float()).view(T, 1, 1)
+		
+		# Discounted sum of true rewards: [N, 1]
+		disc_tr1 = (tr1 * discount_factors).sum(dim=0).view(num_pref) #[N]
+		disc_tr2 = (tr2 * discount_factors).sum(dim=0).view(num_pref) #[N]
+
+		# equally preferable
+		margin_index = (torch.abs(disc_tr1 - disc_tr2) == 0).reshape(-1)
+		#label 1 if trajectory 2 is better, 0 if trajectory 1 is better.
+		labels = 1*(disc_tr1 < disc_tr2)
+		# equally preferable
+		labels[margin_index] = -1 		
+		return labels
+
+	def pref_create_pairs(self, z, action, reward, task):
+		pref_batch_size = z.shape[1]
+		perm = torch.randperm(pref_batch_size, device=z.device)  # random permutation of indices
+		idx1 = perm[:(pref_batch_size//2)]   # first random half
+		idx2 = perm[(pref_batch_size//2):]   # second random half
+
+		z1, z2 = z[:, idx1], z[:, idx2]
+		a1, a2 = action[:, idx1], action[:, idx2] 
+		tr1, tr2 = reward[:, idx1], reward[:, idx2]
+		return z1, z2, a1, a2, tr1, tr2
+	
