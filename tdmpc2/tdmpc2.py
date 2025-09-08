@@ -490,9 +490,8 @@ class TDMPC2(torch.nn.Module):
 			# zs are the Predicted states , since no action is associated with the last state, no reward , no terminated signal. It is not usable, hence exclude the last predicted state. 
 			_zs = zs[:-1] #[T,B , D]
 			qs = self.model.Q(_zs, action, task, return_type='all')
-
-			if self.cfg.pref_learn:
-				reward_loss = 0
+			reward_loss = 0
+			if self.cfg.pref_learn and self.total_pref_feedback >0:
 				pref_z1, pref_z2, pref_a1, pref_a2, labels = self.pref_buffer.sample()
 				# get logits
 				rhat_1 = torch.zeros(self.cfg.num_pref_sampled , device=pref_z1.device)
@@ -504,7 +503,7 @@ class TDMPC2(torch.nn.Module):
 				reward_loss = nn.CrossEntropyLoss(ignore_index=-1)(r_hat, labels)
 			else:
 				# Compute losses
-				reward_loss = 0
+				
 				for t in range(self.cfg.horizon):
 					reward_pred_mean, reward_pred_var = self.model.reward_single_member(_zs[t], action[t], index=member, task=task)
 					reward_loss = reward_loss + F.mse_loss(reward_pred_mean, reward[t]).mean() * self.cfg.rho**t
