@@ -73,7 +73,7 @@ polyak_tau: 0.005
 wandb_project: UBP2_PREF
 wandb_entity: mohamednabail_leaf
 wandb_silent: false
-enable_wandb: false #default true
+enable_wandb: true #default true
 save_csv: true
 
 # misc
