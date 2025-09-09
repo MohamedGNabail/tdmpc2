@@ -468,7 +468,6 @@ class TDMPC2(torch.nn.Module):
 			# World Model prediction is used in encoded next states, Q value estimate given the encoded next states and predicted action from policy
 			with torch.no_grad():
 				next_z = self.model.encode(obs[1:], task) # [T,B, D] the latent dimension of the next states of the current observation in the selected sequence [observation at T=2,3,4] ie target next states for the current state
-				print(next_z)
 				td_targets = self._td_target(next_z, reward, terminated, task) #[T,B,1] target expected return starting from current state
 
 			# Prepare for update
@@ -491,20 +490,22 @@ class TDMPC2(torch.nn.Module):
 			# zs are the Predicted states , since no action is associated with the last state, no reward , no terminated signal. It is not usable, hence exclude the last predicted state. 
 			_zs = zs[:-1] #[T,B , D]
 			qs = self.model.Q(_zs, action, task, return_type='all')
-			reward_loss = 0
-			if self.cfg.pref_learn and self.total_pref_feedback >0:
-				pref_z1, pref_z2, pref_a1, pref_a2, labels = self.pref_buffer.sample()
-				# get logits
-				rhat_1 = torch.zeros(self.cfg.num_pref_sampled , device=pref_z1.device)
-				rhat_2 = torch.zeros(self.cfg.num_pref_sampled , device=pref_z2.device)
-				for t in range(self.cfg.horizon):
-					rhat_1 = rhat_1 + (self.model.reward_single_member(pref_z1[t], pref_a1[t], index=member, task=None)[0] * self.cfg.rho**t).squeeze(-1)
-					rhat_2 = rhat_2 + (self.model.reward_single_member(pref_z2[t], pref_a2[t], index=member, task=None)[0] * self.cfg.rho**t).squeeze(-1)
-				r_hat = torch.stack([rhat_1, rhat_2], dim=-1)  # shape: [batch_size, 2]
-				reward_loss = nn.CrossEntropyLoss(ignore_index=-1)(r_hat, labels)
+			if self.cfg.pref_learn :
+				if self.total_pref_feedback >0:
+					pref_z1, pref_z2, pref_a1, pref_a2, labels = self.pref_buffer.sample()
+					# get logits
+					rhat_1 = torch.zeros(self.cfg.num_pref_sampled , device=pref_z1.device)
+					rhat_2 = torch.zeros(self.cfg.num_pref_sampled , device=pref_z2.device)
+					for t in range(self.cfg.horizon):
+						rhat_1 = rhat_1 + (self.model.reward_single_member(pref_z1[t], pref_a1[t], index=member, task=None)[0] * self.cfg.rho**t).squeeze(-1)
+						rhat_2 = rhat_2 + (self.model.reward_single_member(pref_z2[t], pref_a2[t], index=member, task=None)[0] * self.cfg.rho**t).squeeze(-1)
+					r_hat = torch.stack([rhat_1, rhat_2], dim=-1)  # shape: [batch_size, 2]
+					reward_loss = nn.CrossEntropyLoss(ignore_index=-1)(r_hat, labels)
+				else:
+					reward_loss = torch.tensor(0. , device = self.device)
 			else:
 				# Compute losses
-				
+				reward_loss = 0
 				for t in range(self.cfg.horizon):
 					reward_pred_mean, reward_pred_var = self.model.reward_single_member(_zs[t], action[t], index=member, task=task)
 					reward_loss = reward_loss + F.mse_loss(reward_pred_mean, reward[t]).mean() * self.cfg.rho**t
