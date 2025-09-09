@@ -468,6 +468,7 @@ class TDMPC2(torch.nn.Module):
 			# World Model prediction is used in encoded next states, Q value estimate given the encoded next states and predicted action from policy
 			with torch.no_grad():
 				next_z = self.model.encode(obs[1:], task) # [T,B, D] the latent dimension of the next states of the current observation in the selected sequence [observation at T=2,3,4] ie target next states for the current state
+				print(next_z)
 				td_targets = self._td_target(next_z, reward, terminated, task) #[T,B,1] target expected return starting from current state
 
 			# Prepare for update
@@ -587,8 +588,7 @@ class TDMPC2(torch.nn.Module):
 		"""
 		obs, action, reward, terminated, task = buffer.sample()
 		if self.cfg.pref_learn and add_pref and self.total_pref_feedback < self.cfg.max_pref_feedback:
-			pref_obs, pref_action, pref_reward, pref_terminated, pref_task = buffer.last_K()
-			self._add_reward_pref(pref_obs, pref_action, pref_reward, pref_task)
+			self._add_reward_pref(obs, action, reward, task)
 		kwargs = {}
 		if task is not None:
 			kwargs["task"] = task

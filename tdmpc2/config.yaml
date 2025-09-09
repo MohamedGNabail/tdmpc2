@@ -73,7 +73,7 @@ polyak_tau: 0.005
 wandb_project: UBP2_PREF
 wandb_entity: mohamednabail_leaf
 wandb_silent: false
-enable_wandb: true #default true
+enable_wandb: false #default true
 save_csv: true
 
 # misc
@@ -106,11 +106,11 @@ pref_update_freq: 1000
 num_pref_sampled: 20 #for max_pref_feedback of 5000 : 5 , for max_pref_feedback of 10000 : 10 , for max_pref_feedback of 20000 : 20 
 
 #planning w uncertainty
-rew_uncer_alpha_coef: 1 #default is 1
-dyn_uncer_beta_coef: 1 #default is 1 
+rew_uncer_alpha_coef: 0 #default is 1
+dyn_uncer_beta_coef: 0 #default is 1 
 
 pref_learn: true
-optimistic_pref_sampling: true
+optimistic_pref_sampling: false
 evaluate_w_uncer: false
 planning_criteria: total_value #default is total_value, don't use ubp_reward it is wrong as tested before
 uncertainity_rep: JRD
